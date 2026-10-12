@@ -15,3 +15,7 @@ Every development tool is declared in `mise.toml`. Install them with:
 ```bash
 mise install
 ```
+
+## License
+
+[AGPL-3.0](LICENSE). The reason is in [ADR-0006](https://github.com/RMYPG/edity/blob/main/docs/adr/0006-mpl-for-the-packages-agpl-for-the-server.md).
