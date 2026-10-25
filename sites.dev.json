@@ -1,0 +1,12 @@
+{
+  "sites": [
+    {
+      "id": "edity-sandbox",
+      "hostnames": ["localhost"],
+      "githubRepository": "RMYPG/edity-sandbox",
+      "locale": "en",
+      "zitadelRole": "site:edity-sandbox",
+      "kubernetes": {"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+    }
+  ]
+}

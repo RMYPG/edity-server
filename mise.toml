@@ -1,2 +1,29 @@
 [tools]
 go = "1.27.2"
+golangci-lint = "2.15.0"
+jactionlint = "2.3.0"
+# jactionlint checks workflow scripts with it.
+shellcheck = "0.11.0"
+# Same version as platform's mise.toml.
+infisical = "0.43.132"
+
+[tasks.lint]
+description = "Lint the Go code and the GitHub workflows"
+run = [
+  "go mod tidy -diff",
+  "golangci-lint run",
+  "jactionlint",
+]
+
+[tasks.test]
+description = "Run the tests"
+run = "go test ./..."
+
+[tasks.ci]
+description = "Run every check that CI runs"
+depends = ["lint", "test"]
+
+[tasks.dev]
+description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
+env = { EDITY_SITES_FILE = "sites.dev.json" }
+run = "infisical run --env=dev --path=/github -- go run ./cmd/edity-server"

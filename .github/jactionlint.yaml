@@ -1,0 +1,4 @@
+ignores:
+  - rule: unpinned-images
+    step: Smoke-test the image
+    reason: it runs the image the step before built, which has no digest
