@@ -26,7 +26,7 @@ const sandbox = `{
   ]
 }`
 
-func TestLoadReadsTheSitesAndTheGitHubApp(t *testing.T) {
+func TestLoadReadsTheSitesAndThePublisherApp(t *testing.T) {
 	key := newKey(t)
 	env := map[string]string{
 		"EDITY_SITES_FILE":                       writeFile(t, sandbox),
@@ -45,11 +45,11 @@ func TestLoadReadsTheSitesAndTheGitHubApp(t *testing.T) {
 	if s, ok := cfg.Sites.Lookup("sandbox.example.com"); !ok || s.ID != "edity-sandbox" {
 		t.Errorf("Sites.Lookup(sandbox.example.com) = %q, %v, want edity-sandbox", s.ID, ok)
 	}
-	if cfg.GitHubApp.ID != 123456 {
-		t.Errorf("GitHubApp.ID = %d, want 123456", cfg.GitHubApp.ID)
+	if cfg.Publisher.ID != 123456 {
+		t.Errorf("Publisher.ID = %d, want 123456", cfg.Publisher.ID)
 	}
-	if !key.Equal(cfg.GitHubApp.PrivateKey) {
-		t.Error("GitHubApp.PrivateKey is not the key in EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY")
+	if !key.Equal(cfg.Publisher.PrivateKey) {
+		t.Error("Publisher.PrivateKey is not the key in EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY")
 	}
 }
 
@@ -79,8 +79,8 @@ func TestLoadAcceptsAPKCS8PrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !key.Equal(cfg.GitHubApp.PrivateKey) {
-		t.Error("GitHubApp.PrivateKey is not the key in EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY")
+	if !key.Equal(cfg.Publisher.PrivateKey) {
+		t.Error("Publisher.PrivateKey is not the key in EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY")
 	}
 }
 
@@ -90,7 +90,7 @@ func TestLoadNamesEveryMissingVariable(t *testing.T) {
 		t.Fatal("Load accepted an empty environment")
 	}
 	for _, name := range []string{"EDITY_SITES_FILE", "EDITY_PUBLISHER_GITHUB_APP_ID", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY"} {
-		if !strings.Contains(err.Error(), name+" is not set") {
+		if !strings.Contains(err.Error(), name+": not set") {
 			t.Errorf("Load error = %q, want it to say %s is not set", err, name)
 		}
 	}
@@ -101,12 +101,12 @@ func TestLoadRejectsABadVariable(t *testing.T) {
 	tests := []struct {
 		name, variable, value, want string
 	}{
-		{"missing Sites file", "EDITY_SITES_FILE", filepath.Join(t.TempDir(), "missing.json"), "EDITY_SITES_FILE"},
-		{"invalid Sites file", "EDITY_SITES_FILE", writeFile(t, `{"sites": []}`), "no Sites"},
-		{"App ID not a number", "EDITY_PUBLISHER_GITHUB_APP_ID", "edity-publisher", "EDITY_PUBLISHER_GITHUB_APP_ID is not a GitHub App ID"},
-		{"App ID zero", "EDITY_PUBLISHER_GITHUB_APP_ID", "0", "EDITY_PUBLISHER_GITHUB_APP_ID is not a GitHub App ID"},
-		{"key not PEM", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY is not a PEM private key"},
-		{"key not RSA", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", notAKey, "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY is not an RSA private key"},
+		{"missing Sites file", "EDITY_SITES_FILE", filepath.Join(t.TempDir(), "missing.json"), "EDITY_SITES_FILE: open "},
+		{"invalid Sites file", "EDITY_SITES_FILE", writeFile(t, `{"sites": []}`), "EDITY_SITES_FILE: the Sites file lists no Sites"},
+		{"App ID not a number", "EDITY_PUBLISHER_GITHUB_APP_ID", "edity-publisher", `EDITY_PUBLISHER_GITHUB_APP_ID: "edity-publisher" is not a GitHub App ID`},
+		{"App ID zero", "EDITY_PUBLISHER_GITHUB_APP_ID", "0", `EDITY_PUBLISHER_GITHUB_APP_ID: "0" is not a GitHub App ID`},
+		{"key not PEM", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not a PEM private key"},
+		{"key not RSA", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", notAKey, "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not an RSA private key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

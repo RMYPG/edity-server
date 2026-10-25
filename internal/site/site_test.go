@@ -33,7 +33,7 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 	want := site.Site{
 		ID:          "edity-sandbox",
 		Hostnames:   []string{"sandbox.example.com", "www.sandbox.example.com"},
-		GitHub:      site.Repository{Owner: "RMYPG", Name: "edity-sandbox"},
+		Repository:  site.Repository{Owner: "RMYPG", Name: "edity-sandbox"},
 		Locale:      "en",
 		ZitadelRole: "site:edity-sandbox",
 		Kubernetes:  site.Kubernetes{Namespace: "edity-sandbox", Deployment: "edity-sandbox-sws"},

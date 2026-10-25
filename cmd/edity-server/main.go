@@ -42,7 +42,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
-	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.GitHubApp.ID)
+	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.Publisher.ID)
 
 	select {
 	case err := <-served:

@@ -11,7 +11,7 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # A newer push to a pull request supersedes the older run; every push to main
-  # still publishes its image.
+  # still pushes its image.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

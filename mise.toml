@@ -20,7 +20,7 @@ description = "Run the tests"
 run = "go test ./..."
 
 [tasks.ci]
-description = "Run every check that CI runs"
+description = "Run the linters and the tests, as CI does before building the image"
 depends = ["lint", "test"]
 
 [tasks.dev]

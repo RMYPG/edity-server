@@ -56,7 +56,7 @@ The Sites file lists every Site the server works for. A request whose hostname i
 
 ## Image
 
-CI builds a static binary on `gcr.io/distroless/static-debian13:nonroot` and starts it before anything is pushed. Every push to `main` publishes it as `ghcr.io/rmypg/edity-server`, tagged `sha-<commit>` and `development`. It listens on port 8080 and runs as a non-root user.
+CI builds a static binary on `gcr.io/distroless/static-debian13:nonroot` and starts it before anything is pushed. Every push to `main` pushes it to `ghcr.io/rmypg/edity-server`, tagged `sha-<commit>` and `development`. It listens on port 8080 and runs as a non-root user.
 
 ## License
 

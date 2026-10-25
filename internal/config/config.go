@@ -24,8 +24,8 @@ type Config struct {
 	// Addr is the address the server listens on.
 	Addr  string
 	Sites *site.Registry
-	// GitHubApp is the edity-publisher App, which commits each Publish.
-	GitHubApp GitHubApp
+	// Publisher is the edity-publisher GitHub App, which commits each Publish.
+	Publisher GitHubApp
 }
 
 // GitHubApp holds the credentials of a GitHub App.
@@ -37,40 +37,32 @@ type GitHubApp struct {
 // Load reads the configuration from the environment variables that getenv
 // returns, and reports every missing or invalid one at once.
 func Load(getenv func(string) string) (Config, error) {
-	var errs []error
-	lookup := func(name string) string {
-		value := getenv(name)
-		if value == "" {
-			errs = append(errs, fmt.Errorf("%s is not set", name))
-		}
-		return value
-	}
-
 	cfg := Config{Addr: getenv("EDITY_ADDR")}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	if path := lookup("EDITY_SITES_FILE"); path != "" {
-		sites, err := readSites(path)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("EDITY_SITES_FILE: %w", err))
+
+	var errs []error
+	read := func(name string, parse func(string) error) {
+		value := getenv(name)
+		if value == "" {
+			errs = append(errs, fmt.Errorf("%s: not set", name))
+		} else if err := parse(value); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
-		cfg.Sites = sites
 	}
-	if id := lookup("EDITY_PUBLISHER_GITHUB_APP_ID"); id != "" {
-		n, err := strconv.ParseInt(id, 10, 64)
-		if err != nil || n <= 0 {
-			errs = append(errs, fmt.Errorf("EDITY_PUBLISHER_GITHUB_APP_ID is not a GitHub App ID: %q", id))
-		}
-		cfg.GitHubApp.ID = n
-	}
-	if key := lookup("EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY"); key != "" {
-		k, err := parsePrivateKey(key)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY %w", err))
-		}
-		cfg.GitHubApp.PrivateKey = k
-	}
+	read("EDITY_SITES_FILE", func(path string) (err error) {
+		cfg.Sites, err = readSites(path)
+		return err
+	})
+	read("EDITY_PUBLISHER_GITHUB_APP_ID", func(id string) (err error) {
+		cfg.Publisher.ID, err = parseAppID(id)
+		return err
+	})
+	read("EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", func(key string) (err error) {
+		cfg.Publisher.PrivateKey, err = parsePrivateKey(key)
+		return err
+	})
 
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
@@ -86,12 +78,20 @@ func readSites(path string) (*site.Registry, error) {
 	return site.Parse(bytes.NewReader(data))
 }
 
+func parseAppID(text string) (int64, error) {
+	id, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%q is not a GitHub App ID", text)
+	}
+	return id, nil
+}
+
 // parsePrivateKey reads a PEM RSA key in the PKCS #1 form GitHub hands out,
 // or in PKCS #8. Its errors never quote the key.
 func parsePrivateKey(text string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(text))
 	if block == nil {
-		return nil, errors.New("is not a PEM private key")
+		return nil, errors.New("not a PEM private key")
 	}
 	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		return key, nil
@@ -101,5 +101,5 @@ func parsePrivateKey(text string) (*rsa.PrivateKey, error) {
 			return key, nil
 		}
 	}
-	return nil, errors.New("is not an RSA private key")
+	return nil, errors.New("not an RSA private key")
 }

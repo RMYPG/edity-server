@@ -14,11 +14,12 @@ import (
 	"strings"
 )
 
-// Site is one Astro landing page the server edits, as listed in the Sites file.
+// Site is one Astro landing page the server works for, as listed in the Sites
+// file.
 type Site struct {
 	ID          string     `json:"id"`
 	Hostnames   []string   `json:"hostnames"`
-	GitHub      Repository `json:"githubRepository"`
+	Repository  Repository `json:"githubRepository"`
 	Locale      string     `json:"locale"`
 	ZitadelRole string     `json:"zitadelRole"`
 	Kubernetes  Kubernetes `json:"kubernetes"`
@@ -103,9 +104,9 @@ var hostname = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]
 
 func (s Site) problems() []string {
 	var problems []string
-	required := func(field, value string) {
+	required := func(key, value string) {
 		if value == "" {
-			problems = append(problems, field+" is required")
+			problems = append(problems, key+" is required")
 		}
 	}
 	required("id", s.ID)
@@ -117,7 +118,7 @@ func (s Site) problems() []string {
 			problems = append(problems, fmt.Sprintf("hostnames: %q is not a bare hostname", h))
 		}
 	}
-	required("githubRepository", s.GitHub.Owner)
+	required("githubRepository", s.Repository.Owner)
 	required("locale", s.Locale)
 	required("zitadelRole", s.ZitadelRole)
 	required("kubernetes.namespace", s.Kubernetes.Namespace)
