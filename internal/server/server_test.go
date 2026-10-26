@@ -69,6 +69,28 @@ func TestEveryRouteAnswersNotFoundForAnUnknownHost(t *testing.T) {
 	}
 }
 
+func TestAnUnknownHostGetsNotFoundWhateverThePathSpelling(t *testing.T) {
+	var logs bytes.Buffer
+	handler := newServer(t, &logs)
+
+	// A ServeMux redirects a path it would clean, so the Site lookup has to
+	// come before any ServeMux.
+	paths := []string{"/_edity/api//session", "/_edity/api/./session", "/_edity/x/../api/session", "//_edity/api/session", "//healthz"}
+	for _, path := range paths {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		req.Host = "unknown.example.com"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s on an unknown host: status = %d, want %d", path, rec.Code, http.StatusNotFound)
+		}
+	}
+	if lines := strings.Split(strings.TrimSpace(logs.String()), "\n"); len(lines) != len(paths) {
+		t.Errorf("got %d log lines for %d requests:\n%s", len(lines), len(paths), logs.String())
+	}
+}
+
 func TestEveryRouteReachesItsHandlerForAKnownSite(t *testing.T) {
 	handler := newServer(t, io.Discard)
 

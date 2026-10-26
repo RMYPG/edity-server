@@ -24,10 +24,17 @@ func New(sites *site.Registry, logger *slog.Logger) http.Handler {
 		api.HandleFunc(route, notImplemented)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", health)
-	mux.Handle("/", logRequests(logger, sites, sites.Require(api)))
-	return mux
+	// Everything but the health check goes through the Site lookup before a
+	// ServeMux sees it: a ServeMux redirects a path it would clean, such as
+	// //_edity/api/session, whatever the host.
+	sited := logRequests(logger, sites, sites.Require(api))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			health(w, r)
+			return
+		}
+		sited.ServeHTTP(w, r)
+	})
 }
 
 // health answers Kubernetes probes, which reach the pod directly rather than
