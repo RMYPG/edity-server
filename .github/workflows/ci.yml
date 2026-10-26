@@ -32,13 +32,12 @@ jobs:
       - name: Lint and test
         run: mise run ci
 
+  # Builds and starts the image with the workflow's read-only token. Only the
+  # publish job, which pull requests never run, can write packages.
   image:
     needs: check
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,8 +72,25 @@ jobs:
             --header 'Host: unknown.example.com' http://localhost:8080/_edity/api/session)
           test "$status" = 404
 
+  publish:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+        with:
+          cache-key: Dockerfile
+
       - name: Log in to GHCR
-        if: github.event_name == 'push'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
@@ -89,8 +105,9 @@ jobs:
             type=raw,value=development,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=long
 
+      # Rebuilt from the same commit, mostly from the build cache the image
+      # job filled, after that job started the image.
       - name: Push the image
-        if: github.event_name == 'push'
         uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
