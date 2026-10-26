@@ -52,6 +52,8 @@ The Sites file lists every Site the server works for. A request whose hostname i
 }
 ```
 
+The server refuses to start on a Sites file it can't read unambiguously: unknown or repeated keys (in any letter case), anything after the JSON document, or a Site field that is missing or malformed. `githubRepository` follows GitHub's naming rules, `locale` is a BCP 47 tag such as `es` or `es-ES`, `zitadelRole` has no spaces, and the namespace and Deployment are valid Kubernetes names.
+
 `GET /healthz` answers Kubernetes probes on any hostname. The routes of the spec's API answer 501 until they are implemented. Logs are JSON lines on stdout, one per request.
 
 ## Image

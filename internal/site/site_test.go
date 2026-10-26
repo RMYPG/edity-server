@@ -49,6 +49,15 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsLanguageTagsWithAScriptOrRegion(t *testing.T) {
+	for _, locale := range []string{"es", "es-ES", "zh-Hant-TW", "es-419"} {
+		file := withSandbox(t, func(s map[string]any) { s["locale"] = locale })
+		if _, err := site.Parse(strings.NewReader(file)); err != nil {
+			t.Errorf("locale %q: Parse: %v", locale, err)
+		}
+	}
+}
+
 func TestParseAcceptsWhitespaceAfterTheDocument(t *testing.T) {
 	if _, err := site.Parse(strings.NewReader(sandbox + "\n\n")); err != nil {
 		t.Errorf("Parse: %v", err)
@@ -145,7 +154,17 @@ func TestParseRejectsAnInvalidSitesFile(t *testing.T) {
 		{"hostname with a scheme", withSandbox(t, func(s map[string]any) { s["hostnames"] = []string{"https://sandbox.example.com"} }), `"https://sandbox.example.com" is not a bare hostname`},
 		{"repository without an owner", withSandbox(t, func(s map[string]any) { s["githubRepository"] = "edity-sandbox" }), `"edity-sandbox" is not owner/name`},
 		{"repository with a path", withSandbox(t, func(s map[string]any) { s["githubRepository"] = "RMYPG/edity-sandbox/tree" }), `"RMYPG/edity-sandbox/tree" is not owner/name`},
+		{"blank id", withSandbox(t, func(s map[string]any) { s["id"] = " " }), "id is required"},
+		{"blank repository", withSandbox(t, func(s map[string]any) { s["githubRepository"] = " / " }), `" / " is not owner/name`},
+		{"repository name with a space", withSandbox(t, func(s map[string]any) { s["githubRepository"] = "RMYPG/edity sandbox" }), `"RMYPG/edity sandbox" is not owner/name`},
+		{"owner starting with a hyphen", withSandbox(t, func(s map[string]any) { s["githubRepository"] = "-RMYPG/edity-sandbox" }), `"-RMYPG/edity-sandbox" is not owner/name`},
+		{"repository name ..", withSandbox(t, func(s map[string]any) { s["githubRepository"] = "RMYPG/.." }), `"RMYPG/.." is not owner/name`},
 		{"no locale", withSandbox(t, func(s map[string]any) { delete(s, "locale") }), `site "edity-sandbox": locale is required`},
+		{"locale that is not a language tag", withSandbox(t, func(s map[string]any) { s["locale"] = "not_a_locale" }), `locale: "not_a_locale" is not a language tag`},
+		{"blank Zitadel role", withSandbox(t, func(s map[string]any) { s["zitadelRole"] = " " }), `site "edity-sandbox": zitadelRole is required`},
+		{"Zitadel role with a space", withSandbox(t, func(s map[string]any) { s["zitadelRole"] = "site: edity-sandbox" }), `zitadelRole: "site: edity-sandbox" has spaces`},
+		{"namespace that is not a Kubernetes name", withSandbox(t, func(s map[string]any) { s["kubernetes"].(map[string]any)["namespace"] = "UPPER_CASE" }), `kubernetes.namespace: "UPPER_CASE" is not a Kubernetes namespace name`},
+		{"Deployment that is not a Kubernetes name", withSandbox(t, func(s map[string]any) { s["kubernetes"].(map[string]any)["deployment"] = "bad/name" }), `kubernetes.deployment: "bad/name" is not a Kubernetes object name`},
 		{"no Zitadel role", withSandbox(t, func(s map[string]any) { delete(s, "zitadelRole") }), `site "edity-sandbox": zitadelRole is required`},
 		{"no namespace", withSandbox(t, func(s map[string]any) { delete(s["kubernetes"].(map[string]any), "namespace") }), `site "edity-sandbox": kubernetes.namespace is required`},
 		{"no Deployment", withSandbox(t, func(s map[string]any) { delete(s["kubernetes"].(map[string]any), "deployment") }), `site "edity-sandbox": kubernetes.deployment is required`},

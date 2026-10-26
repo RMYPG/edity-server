@@ -32,10 +32,16 @@ type Repository struct {
 	Name  string
 }
 
+// GitHub's rules for account and repository names.
+var (
+	githubOwner = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+	githubName  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+)
+
 // UnmarshalText reads "owner/name".
 func (r *Repository) UnmarshalText(text []byte) error {
 	owner, name, ok := strings.Cut(string(text), "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+	if !ok || !githubOwner.MatchString(owner) || !githubName.MatchString(name) || name == "." || name == ".." {
 		return fmt.Errorf("githubRepository: %q is not owner/name", text)
 	}
 	r.Owner, r.Name = owner, name
@@ -159,14 +165,31 @@ func noRepeatedKeys(data []byte) error {
 	return value("")
 }
 
-// hostname is a DNS name with no scheme, port or path.
-var hostname = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.?$`)
+var (
+	// hostname is a DNS name with no scheme, port or path.
+	hostname = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.?$`)
+	// languageTag is a BCP 47 language, with an optional script and region,
+	// such as es, es-ES or zh-Hant-TW.
+	languageTag = regexp.MustCompile(`^(?i)[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?$`)
+	noSpaces    = regexp.MustCompile(`^\S+$`)
+	// Kubernetes names a namespace with a DNS label, and a Deployment with a
+	// DNS subdomain (RFC 1123).
+	kubernetesNamespace  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	kubernetesObjectName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+)
 
 func (s Site) problems() []string {
 	var problems []string
-	required := func(key, value string) {
-		if value == "" {
+	required := func(key, value string) bool {
+		if strings.TrimSpace(value) == "" {
 			problems = append(problems, key+" is required")
+			return false
+		}
+		return true
+	}
+	matches := func(key, value string, format *regexp.Regexp, isNot string) {
+		if required(key, value) && !format.MatchString(value) {
+			problems = append(problems, fmt.Sprintf("%s: %q %s", key, value, isNot))
 		}
 	}
 	required("id", s.ID)
@@ -179,10 +202,16 @@ func (s Site) problems() []string {
 		}
 	}
 	required("githubRepository", s.Repository.Owner)
-	required("locale", s.Locale)
-	required("zitadelRole", s.ZitadelRole)
-	required("kubernetes.namespace", s.Kubernetes.Namespace)
-	required("kubernetes.deployment", s.Kubernetes.Deployment)
+	matches("locale", s.Locale, languageTag, "is not a language tag, such as es or es-ES")
+	matches("zitadelRole", s.ZitadelRole, noSpaces, "has spaces")
+	matches("kubernetes.namespace", s.Kubernetes.Namespace, kubernetesNamespace,
+		"is not a Kubernetes namespace name: lowercase letters, digits and -, at most 63")
+	if len(s.Kubernetes.Deployment) > 253 {
+		problems = append(problems, "kubernetes.deployment: longer than 253 characters")
+	} else {
+		matches("kubernetes.deployment", s.Kubernetes.Deployment, kubernetesObjectName,
+			"is not a Kubernetes object name: lowercase letters, digits, - and .")
+	}
 	return problems
 }
 
