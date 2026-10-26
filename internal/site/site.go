@@ -3,6 +3,7 @@
 package site
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,10 +56,17 @@ type Registry struct {
 // Parse reads a Sites file and checks that every Site in it is complete and
 // has its own id and hostnames.
 func Parse(r io.Reader) (*Registry, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading the Sites file: %w", err)
+	}
+	if err := noRepeatedKeys(data); err != nil {
+		return nil, fmt.Errorf("reading the Sites file: %w", err)
+	}
 	var file struct {
 		Sites []Site `json:"sites"`
 	}
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("reading the Sites file: %w", err)
@@ -102,6 +110,53 @@ func Parse(r io.Reader) (*Registry, error) {
 		return nil, fmt.Errorf("invalid Sites file: %w", err)
 	}
 	return reg, nil
+}
+
+// noRepeatedKeys refuses an object that has the same key twice. Decoding
+// keeps the last one without a word, and matches keys whatever their case,
+// so "locale" and "Locale" count as the same key.
+func noRepeatedKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var value func(path string) error
+	value = func(path string) error {
+		token, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'):
+			seen := map[string]bool{}
+			for dec.More() {
+				token, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				key, _ := token.(string)
+				at := key
+				if path != "" {
+					at = path + "." + key
+				}
+				if seen[strings.ToLower(key)] {
+					return fmt.Errorf("%q appears twice", at)
+				}
+				seen[strings.ToLower(key)] = true
+				if err := value(at); err != nil {
+					return err
+				}
+			}
+		case json.Delim('['):
+			for i := 0; dec.More(); i++ {
+				if err := value(fmt.Sprintf("%s[%d]", path, i)); err != nil {
+					return err
+				}
+			}
+		default:
+			return nil
+		}
+		_, err = dec.Token() // the closing } or ]
+		return err
+	}
+	return value("")
 }
 
 // hostname is a DNS name with no scheme, port or path.
