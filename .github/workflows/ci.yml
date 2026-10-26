@@ -66,7 +66,9 @@ jobs:
             --env EDITY_PUBLISHER_GITHUB_APP_ID=1 \
             --env EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)" \
             edity-server:ci
-          curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 \
+          # Until the server listens, Docker's port proxy accepts a connection and
+          # resets it, which --retry-connrefused doesn't cover.
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
             http://localhost:8080/healthz
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header 'Host: unknown.example.com' http://localhost:8080/_edity/api/session)
