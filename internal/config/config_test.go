@@ -103,8 +103,9 @@ func TestLoadRejectsABadVariable(t *testing.T) {
 	}{
 		{"missing Sites file", "EDITY_SITES_FILE", filepath.Join(t.TempDir(), "missing.json"), "EDITY_SITES_FILE: open "},
 		{"invalid Sites file", "EDITY_SITES_FILE", writeFile(t, `{"sites": []}`), "EDITY_SITES_FILE: the Sites file lists no Sites"},
-		{"App ID not a number", "EDITY_PUBLISHER_GITHUB_APP_ID", "edity-publisher", `EDITY_PUBLISHER_GITHUB_APP_ID: "edity-publisher" is not a GitHub App ID`},
-		{"App ID zero", "EDITY_PUBLISHER_GITHUB_APP_ID", "0", `EDITY_PUBLISHER_GITHUB_APP_ID: "0" is not a GitHub App ID`},
+		{"App ID not a number", "EDITY_PUBLISHER_GITHUB_APP_ID", "edity-publisher", "EDITY_PUBLISHER_GITHUB_APP_ID: not a GitHub App ID"},
+		{"App ID zero", "EDITY_PUBLISHER_GITHUB_APP_ID", "0", "EDITY_PUBLISHER_GITHUB_APP_ID: not a GitHub App ID"},
+		{"App ID swapped with the key", "EDITY_PUBLISHER_GITHUB_APP_ID", notAKey, "EDITY_PUBLISHER_GITHUB_APP_ID: not a GitHub App ID"},
 		{"key not PEM", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not a PEM private key"},
 		{"key not RSA", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", notAKey, "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not an RSA private key"},
 	}

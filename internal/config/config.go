@@ -78,10 +78,12 @@ func readSites(path string) (*site.Registry, error) {
 	return site.Parse(bytes.NewReader(data))
 }
 
+// parseAppID reads a GitHub App ID. Its error never quotes the value, which
+// is the private key if the two secrets were swapped.
 func parseAppID(text string) (int64, error) {
 	id, err := strconv.ParseInt(text, 10, 64)
 	if err != nil || id <= 0 {
-		return 0, fmt.Errorf("%q is not a GitHub App ID", text)
+		return 0, errors.New("not a GitHub App ID")
 	}
 	return id, nil
 }
