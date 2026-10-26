@@ -10,8 +10,10 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # A newer push to a pull request supersedes the older run; every push to main
-  # still pushes its image.
+  # On a pull request, a newer push cancels the older run. On main, a started
+  # run always finishes, but GitHub keeps only the newest waiting run: a commit
+  # superseded while its run waits gets no sha- image, and development still
+  # ends on the latest commit.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
