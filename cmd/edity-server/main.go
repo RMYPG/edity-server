@@ -34,12 +34,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           server.New(cfg.Sites, logger),
-		ReadHeaderTimeout: 10 * time.Second,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
-	}
+	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger), logger)
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
 	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.Publisher.ID)
@@ -56,4 +51,20 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// httpServer bounds how long a client may take to send a request, and how
+// long a connection may stay open, so that slow or idle clients can't hold
+// the connections every Site shares. A Publish waits on GitHub before it
+// answers, hence the longer write timeout.
+func httpServer(addr string, handler http.Handler, logger *slog.Logger) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+	}
 }
