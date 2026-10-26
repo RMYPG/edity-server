@@ -63,6 +63,11 @@ func Parse(r io.Reader) (*Registry, error) {
 	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("reading the Sites file: %w", err)
 	}
+	// Decode reads one JSON value and leaves the rest, which would otherwise
+	// be ignored without a word.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("reading the Sites file: it holds more than one JSON value")
+	}
 	if len(file.Sites) == 0 {
 		return nil, errors.New("the Sites file lists no Sites")
 	}

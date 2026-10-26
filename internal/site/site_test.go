@@ -49,6 +49,12 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsWhitespaceAfterTheDocument(t *testing.T) {
+	if _, err := site.Parse(strings.NewReader(sandbox + "\n\n")); err != nil {
+		t.Errorf("Parse: %v", err)
+	}
+}
+
 func TestLookupMatchesTheHostHeaderWhateverItsCaseOrPort(t *testing.T) {
 	sites, err := site.Parse(strings.NewReader(sandbox))
 	if err != nil {
@@ -125,6 +131,8 @@ func TestParseRejectsAnInvalidSitesFile(t *testing.T) {
 		want string
 	}{
 		{"not JSON", "sites: []", "Sites file"},
+		{"a second document after it", sandbox + `{"sites": []}`, "more than one JSON value"},
+		{"text after it", sandbox + " garbage", "more than one JSON value"},
 		{"misspelt field", withSandbox(t, func(s map[string]any) { s["hostname"] = "sandbox.example.com" }), `unknown field "hostname"`},
 		{"no Sites", `{"sites": []}`, "no Sites"},
 		{"no id", withSandbox(t, func(s map[string]any) { delete(s, "id") }), "site 1: id is required"},
