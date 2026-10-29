@@ -49,6 +49,22 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 	}
 }
 
+func TestSitesListsEachSiteOnceInTheFilesOrder(t *testing.T) {
+	sites, err := site.Parse(strings.NewReader(withSandboxTwice(t, func(other map[string]any) {
+		other["id"], other["hostnames"] = "fisioindoor", []string{"fisioindoor.example.com"}
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, s := range sites.Sites() {
+		ids = append(ids, s.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"edity-sandbox", "fisioindoor"}) {
+		t.Errorf("Sites = %v, want edity-sandbox, then fisioindoor", ids)
+	}
+}
+
 func TestParseAcceptsLanguageTagsWithAScriptOrRegion(t *testing.T) {
 	for _, locale := range []string{"es", "es-ES", "zh-Hant-TW", "es-419"} {
 		file := withSandbox(t, func(s map[string]any) { s["locale"] = locale })

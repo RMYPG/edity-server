@@ -25,7 +25,9 @@
 //
 // The Editor tells the Client of a failed Publish that the Developer has
 // been notified (P5), so a Tracker answers failed only once its Reporter
-// has reported the failure to the Developer (V6).
+// has reported the failure to the Developer (V6). Its sweeps ask after
+// each Site's Publishes since its last Release every few minutes, so that a
+// failure is reported even when no Client asks about it.
 //
 // Deploying and live are ticket 33's.
 package progress

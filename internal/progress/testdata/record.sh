@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Records the GitHub responses progress_test.go replays, from RMYPG/edity-sandbox:
-# the two Publishes of 2026-10-29 and the Developer commit before them. Every
-# call is a read, made as whoever gh is logged in as. Each file keeps the
-# status line, the headers the server reads and the body, as GitHub sent them.
-# Run it with `mise run record:progress`.
+# Records the GitHub responses progress_test.go and sweep_test.go replay, from
+# RMYPG/edity-sandbox: the two Publishes of 2026-10-29 and the Developer
+# commit before them. Every call is a read, made as whoever gh is logged in
+# as. Each file keeps the status line, the headers the server reads and the
+# body, as GitHub sent them. Run it with `mise run record:progress`.
 set -euo pipefail
 
 repo=repos/RMYPG/edity-sandbox
@@ -26,3 +26,8 @@ record "compare-${first:0:7}-v1.0.1.http" "$repo/compare/$first...v1.0.1?per_pag
 record "compare-${first:0:7}-v1.0.2.http" "$repo/compare/$first...v1.0.2?per_page=1"
 record "compare-${second:0:7}-v1.0.2.http" "$repo/compare/$second...v1.0.2?per_page=1"
 record release-runs.http "$repo/actions/workflows/release-on-publish.yml/runs?event=workflow_run&per_page=20"
+# What a sweep found on main while main was each Publish: the commits since
+# the last Release, and main's commits had there been no Release.
+record "compare-v1.0.0-${first:0:7}.http" "$repo/compare/v1.0.0...$first"
+record "compare-v1.0.2-${second:0:7}.http" "$repo/compare/v1.0.2...$second"
+record "commits-${first:0:7}.http" "$repo/commits?sha=$first&per_page=100"

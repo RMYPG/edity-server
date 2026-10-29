@@ -96,7 +96,9 @@ The App opens GitHub issues on the Site repository to report to the Developer wh
 
 Each kind has one open issue at a time, which the App opened and which a hidden marker in its body names. Every failure, and every Publish that ships more such commits, is a comment on it. The body lists, in another hidden marker, what the issue told: a failed run by its ID and attempt, so a run run again that fails again is told again, or a missed deadline by the commit. A failure polled again, or by a server that restarted, is not told twice. One call finds the issues, the App's 30 updated last, closed ones too, and it costs nothing while they stay the same. Once the Developer closes the issue, what it told is not told again, and the next news opens a new issue.
 
-The issue is opened when a request asks for the progress of the failed Publish. A Client who closes the tab before the Release fails stops asking, so the issue waits until the Editor asks again.
+The issue is opened when something asks for the progress of the failed Publish: the Editor, while the Client watches it, and a sweep, since a Client who closes the tab stops asking. Every 5 minutes, from when it starts, the server sweeps each Site in turn: it compares the highest `vX.Y.Z` tag with `main` (or lists `main`'s commits while there is no Release), and asks the progress of each of the App's commits since, its newest 10, as a request would, so that the same checks keep a failure from being told twice. A sweep stores nothing, logs one line per Site, and stops when the server does.
+
+The sweeps cost the rate limit little next to the Editor's polling. The tests count them (`TestSweepingStaysWithinTheRateLimit`): a Site with nothing since its last Release makes 2 calls a sweep, 25 an hour, of which GitHub counts 5, the first answers and the same again once the token is replaced. A Site whose Publish stays under way all hour makes 7 calls a sweep, 85 an hour, of which GitHub counts 13. Twenty Sites, each with a Publish under way, would cost some 260 of the 5,000 calls an hour every Site shares.
 
 ## API
 

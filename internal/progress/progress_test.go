@@ -153,11 +153,13 @@ type fakeGitHub struct {
 	// calls counts the calls made with a token, and notModified those of
 	// them answered 304.
 	calls, notModified int
+	// asked counts the calls made with a token by path and query.
+	asked map[string]int
 }
 
 func newFake(t *testing.T) (*fakeGitHub, *Tracker) {
 	t.Helper()
-	f := &fakeGitHub{t: t, now: at("18:50:01"), answers: answers(t), tokens: map[string]time.Time{}}
+	f := &fakeGitHub{t: t, now: at("18:50:01"), answers: answers(t), tokens: map[string]time.Time{}, asked: map[string]int{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	app := github.NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
@@ -246,6 +248,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f.calls++
+	f.asked[strings.TrimPrefix(r.URL.RequestURI(), "/repos/RMYPG/edity-sandbox/")]++
 	if until, ok := f.tokens[token]; !ok || !f.now.Before(until) {
 		writeJSON(http.StatusUnauthorized, `{"message": "Bad credentials"}`)
 		return

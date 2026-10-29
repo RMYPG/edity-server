@@ -42,27 +42,42 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	publisher := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 20 * time.Second})
 	repository := func(r site.Repository) *github.Repo { return publisher.Repo(r.Owner, r.Name) }
 	reporter := issues.New(repository, publisher.BotLogin, logger)
+	tracker := progress.New(repository, publisher.BotLogin, reporter)
 	services := server.Services{
 		// No Client can log in before ticket 25, so every Publish gets 401.
 		Sessions:  server.NoSessions{},
 		Publisher: publish.New(repository),
 		Reporter:  reporter,
-		Tracker:   progress.New(repository, publisher.BotLogin, reporter),
+		Tracker:   tracker,
 	}
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
 	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.Publisher.ID)
 
+	// A failed Publish is reported to the Developer even when no Client
+	// asks for its progress (V6).
+	sweeping, stopSweeping := context.WithCancel(ctx)
+	defer stopSweeping()
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		tracker.Sweeps(sweeping, cfg.Sites.Sites(), progress.SweepPeriod, logger)
+	}()
+
 	select {
 	case err := <-served:
+		stopSweeping()
+		<-swept
 		return err
 	case <-ctx.Done():
 	}
 	logger.Info("edity-server shutting down")
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = srv.Shutdown(shutdown)
+	<-swept
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
