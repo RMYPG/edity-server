@@ -1,6 +1,8 @@
 [tools]
 go = "1.27.2"
 golangci-lint = "2.15.0"
+# Lints the OpenAPI file, api/openapi.yaml.
+vacuum = "0.35.7"
 jactionlint = "2.3.0"
 # jactionlint checks workflow scripts with it.
 shellcheck = "0.11.0"
@@ -8,10 +10,13 @@ shellcheck = "0.11.0"
 infisical = "0.43.132"
 
 [tasks.lint]
-description = "Lint the Go code and the GitHub workflows"
+description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
 run = [
   "go mod tidy -diff",
   "golangci-lint run",
+  # A List's Items are content values too, so ContentValue refers to itself
+  # through an array on purpose.
+  "vacuum lint --ruleset api/vacuum-ruleset.yaml --fail-severity warn --ignore-array-circle-ref --details --no-banner --no-update-check api/openapi.yaml",
   "jactionlint",
 ]
 

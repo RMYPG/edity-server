@@ -16,7 +16,7 @@ Every development tool is declared in `mise.toml`. Install them with:
 mise install
 ```
 
-Run the checks CI runs, the Go and workflow linters and the tests, with:
+Run the checks CI runs, the Go, OpenAPI and workflow linters and the tests, with:
 
 ```bash
 mise run ci
@@ -55,6 +55,16 @@ The Sites file lists every Site the server works for. A request whose hostname i
 The server refuses to start on a Sites file it can't read unambiguously: unknown or repeated keys (in any letter case), anything after the JSON document, or a Site field that is missing or malformed. `githubRepository` follows GitHub's naming rules, `locale` is a BCP 47 tag such as `es` or `es-ES`, `zitadelRole` has no spaces, and the namespace and Deployment are valid Kubernetes names.
 
 `GET /healthz` answers Kubernetes probes on any hostname. The routes of the spec's API answer 501 until they are implemented. Logs are JSON lines on stdout, one per request.
+
+## API
+
+[`api/openapi.yaml`](api/openapi.yaml) describes the server's HTTP API in OpenAPI 3.1: every route the Editor and the browser call on a Site's origin, every status each one answers, and every body. It is the contract between the server and the Editor.
+
+- The `edity` repository generates the Editor's client from it, fetched at a pinned commit of this repository's `main`: `https://raw.githubusercontent.com/RMYPG/edity-server/<commit>/api/openapi.yaml`. It is one file with no references to others, so that fetch is the whole contract, and a commit's file never changes.
+- The handlers' tests check their requests and responses against it. Wrap the server in `apitest.Handler` (`internal/apitest`) in a test, and every response it gives must be one the file describes, every request the file does not allow must get a 4xx, and every route the file does not have must get 404 or 405.
+- `mise run lint` lints it with [vacuum](https://quobix.com/vacuum/), with the rules in [`api/vacuum-ruleset.yaml`](api/vacuum-ruleset.yaml).
+
+Sites built with an older Editor keep calling the server, so a change to the file keeps the calls of earlier Editors working.
 
 ## Image
 

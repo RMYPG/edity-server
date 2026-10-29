@@ -1,0 +1,10 @@
+# The rules vacuum lints openapi.yaml with: its recommended ones, but for two
+# that don't fit this API.
+extends: [[vacuum:oas, recommended]]
+rules:
+  # The spec fixes the paths, which every Site routes under /_edity/.
+  paths-kebab-case: off
+  # Every request and response body has an example, which
+  # oas3-valid-schema-example checks against its schema. This rule would want
+  # one on every schema and property as well.
+  oas3-missing-example: off
