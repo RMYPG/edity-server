@@ -192,5 +192,5 @@ func newServer(t *testing.T, logs io.Writer) http.Handler {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	return server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)))
+	return server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)), server.Services{})
 }

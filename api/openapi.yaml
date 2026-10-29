@@ -266,8 +266,10 @@ paths:
               description: The progress of the Release the commit becomes.
         '400':
           description: |
-            Not a Publish: the body is not JSON, or not of the shape of
-            `PublishRequest`. Nothing was committed.
+            Not a Publish: the body is not JSON sent as `application/json`,
+            or not of the shape of `PublishRequest`, or two of its Changes
+            are for one Field or List, or one is inside the other's, which
+            the Editor never sends. Nothing was committed.
           content:
             text/plain:
               schema:
@@ -278,6 +280,14 @@ paths:
           $ref: '#/components/responses/ForeignOrigin'
         '404':
           $ref: '#/components/responses/UnknownSite'
+        '413':
+          description: |
+            The body is larger than a Publish can be, a mebibyte. Nothing
+            was committed.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
         '409':
           description: |
             Every Change is a Conflict, so nothing merged and nothing was
@@ -295,7 +305,10 @@ paths:
             Some Change breaks the page's Field definitions at `main` HEAD, or
             is not for one of its Fields or Lists (V1). A page with no content
             at `main` HEAD has neither, so each of its Changes is `unknown`.
-            Nothing was committed.
+            The content the Changes that merge would make must pass the
+            Field definitions as a whole, so a violation can also be where no
+            Change is, in content already on `main` (N3). Nothing was
+            committed.
           content:
             application/json:
               schema:
@@ -314,6 +327,34 @@ paths:
             Retry-After:
               description: How many seconds to wait before the Site can publish again.
               required: true
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '500':
+          description: |
+            The Site repository can't be published as it is: its content or
+            Field definitions at `main` HEAD can't be read, its
+            `package.json` has no `X.Y.Z` version to bump, or the
+            edity-publisher GitHub App is not installed on it or lacks a
+            permission. Nothing was committed, and the Developer has to fix
+            the repository.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: |
+            The Publish did not go through for now: GitHub could not be
+            reached or is limiting the server's requests, or `main` kept
+            moving while the server committed. The Client can publish again
+            later.
+          headers:
+            Retry-After:
+              description: How many seconds to wait before publishing again, when the server knows.
               schema:
                 type: integer
                 minimum: 1
