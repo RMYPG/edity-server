@@ -14,6 +14,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -40,32 +41,40 @@ type answer struct {
 type fakeCommit struct {
 	parent  string
 	message string
-	files   map[string]string
+	// author is the App's bot for the commits CreateCommit makes, and the
+	// Developer for the others.
+	author string
+	files  map[string]string
 }
+
+// bot is the App's bot login, which authors its commits.
+const bot = "edity-publisher[bot]"
+
+func botLogin(context.Context) (string, error) { return bot, nil }
 
 func newRepo(t *testing.T, files map[string]string) *fakeRepo {
 	t.Helper()
 	r := &fakeRepo{commits: map[string]fakeCommit{}}
-	r.head = r.add("", "Initial commit", files)
+	r.head = r.add("", "Mario Rojas Padrón", "Initial commit", files)
 	return r
 }
 
-// add makes a commit on main with files changed.
-func (r *fakeRepo) add(parent, message string, changed map[string]string) string {
+// add makes a commit of author's on main with files changed.
+func (r *fakeRepo) add(parent, author, message string, changed map[string]string) string {
 	files := map[string]string{}
 	if parent != "" {
 		maps.Copy(files, r.commits[parent].files)
 	}
 	maps.Copy(files, changed)
 	sha := fmt.Sprintf("%040x", len(r.commits)+1)
-	r.commits[sha] = fakeCommit{parent: parent, message: message, files: files}
+	r.commits[sha] = fakeCommit{parent: parent, message: message, author: author, files: files}
 	r.head = sha
 	return sha
 }
 
 // push is a Developer's commit on main.
 func (r *fakeRepo) push(changed map[string]string) {
-	r.add(r.head, "A Developer's commit", changed)
+	r.add(r.head, "Mario Rojas Padrón", "A Developer's commit", changed)
 }
 
 func (r *fakeRepo) Head(_ context.Context, branch string) (string, error) {
@@ -99,7 +108,7 @@ func (r *fakeRepo) CreateCommit(_ context.Context, c github.NewCommit) (string, 
 			files[f.Path] = string(f.Contents)
 		}
 		r.made++
-		return r.add(c.Parent, c.Message, files)
+		return r.add(c.Parent, bot, c.Message, files)
 	}
 	if len(r.answers) > 0 {
 		a := r.answers[0]
@@ -124,7 +133,23 @@ func (r *fakeRepo) GitCommit(_ context.Context, sha string) (github.GitCommit, e
 	if !ok {
 		return github.GitCommit{}, github.ErrNotFound
 	}
-	return github.GitCommit{SHA: sha, Message: c.message, Parents: []string{c.parent}}, nil
+	return github.GitCommit{SHA: sha, Message: c.message, Author: c.author, Parents: []string{c.parent}}, nil
+}
+
+func (r *fakeRepo) Commits(_ context.Context, ref, path string) ([]github.GitCommit, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.commits[ref]; !ok {
+		return nil, github.ErrNotFound
+	}
+	var changed []github.GitCommit
+	for sha := ref; sha != ""; sha = r.commits[sha].parent {
+		c := r.commits[sha]
+		if c.files[path] != r.commits[c.parent].files[path] {
+			changed = append(changed, github.GitCommit{SHA: sha, Message: c.message, Author: c.author, Parents: []string{c.parent}})
+		}
+	}
+	return changed, nil
 }
 
 // file is a file of main HEAD.
@@ -156,7 +181,7 @@ func sandboxFiles(t *testing.T) map[string]string {
 }
 
 func publisherFor(repo *fakeRepo) *Publisher {
-	p := New(func(site.Repository) Repository { return repo })
+	p := New(func(site.Repository) Repository { return repo }, botLogin)
 	p.wait = func(context.Context, int) error { return nil }
 	return p
 }
@@ -192,7 +217,7 @@ func TestAPublishCommitsTheChangesAndAPatchBumpOnHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if published.SHA != repo.head || published.Version != "1.0.1" || published.Conflicts != nil {
+	if published.SHA != repo.head || published.Version != (release.Version{1, 0, 1}) || published.Conflicts != nil {
 		t.Errorf("Publish = %+v, want main HEAD %s at 1.0.1, no conflicts", published, repo.head)
 	}
 	commit := repo.commits[repo.head]
@@ -274,6 +299,91 @@ func TestAPublishInWhichEveryChangeIsAConflictCommitsNothing(t *testing.T) {
 	}
 	if repo.head != head {
 		t.Error("main moved")
+	}
+}
+
+func TestAChangeAlreadyPublishedIsNoConflictAndCommitsNothing(t *testing.T) {
+	repo := newRepo(t, sandboxFiles(t))
+	draft := Draft{Page: "home", Changes: []Change{
+		change(t, "visit.price", `35`, `40`),
+		// hero.cta holds its value after already, whatever its value
+		// before.
+		change(t, "hero.cta", `"Pide tu cita"`, `"Reserva tu cita"`),
+		change(t, "stats.patients", `12000`, `13000`),
+	}}
+	published, err := publisherFor(repo).Publish(t.Context(), sandbox, draft, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(published.Conflicts, []string{"stats.patients"}) {
+		t.Errorf("Conflicts = %v, want stats.patients alone", published.Conflicts)
+	}
+	if msg := repo.commits[repo.head].message; msg != "content: publish home\n\nChanged:\n- visit.price\n\nEdity-Client: Ana García" {
+		t.Errorf("the message lists more than what merged:\n%s", msg)
+	}
+
+	// Nothing merges, and a Change is a Conflict: the Conflicts alone.
+	head := repo.head
+	_, err = publisherFor(repo).Publish(t.Context(), sandbox, Draft{Page: "home", Changes: []Change{
+		change(t, "hero.cta", `"Pide tu cita"`, `"Reserva tu cita"`),
+		change(t, "stats.patients", `12000`, `13000`),
+	}}, ana)
+	var conflicts *ConflictsError
+	if !errors.As(err, &conflicts) || !slices.Equal(conflicts.Paths, []string{"stats.patients"}) || repo.head != head {
+		t.Errorf("Publish: %v, want stats.patients alone as a Conflict, and no commit", err)
+	}
+}
+
+// The Client missed the 202 of a Publish, and publishes the same Draft
+// again: they are told of the Publish that made it, and can follow it.
+func TestADraftAlreadyPublishedIsAnsweredWithThePagesLastPublish(t *testing.T) {
+	repo := newRepo(t, sandboxFiles(t))
+	draft := Draft{Page: "home", Changes: []Change{
+		change(t, "visit.price", `35`, `40`),
+		change(t, "services", `["Fisioterapia deportiva", "Suelo pélvico", "Punción seca", "Rehabilitación tras cirugía 🦴"]`, `["Punción seca", "Suelo pélvico"]`),
+	}}
+	first, err := publisherFor(repo).Publish(t.Context(), sandbox, draft, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Developer's commit that does not touch the page.
+	repo.push(map[string]string{"README.md": "# Fisio Sandbox"})
+
+	again, err := publisherFor(repo).Publish(t.Context(), sandbox, draft, ana)
+	if err != nil || again.SHA != first.SHA || again.Version != (release.Version{1, 0, 1}) || again.Conflicts != nil || repo.made != 1 {
+		t.Errorf("Publish again = %+v, %v, made %d, want the first Publish %s at 1.0.1 and no commit", again, err, repo.made, first.SHA)
+	}
+
+	// Published again after a later Publish of the page, it is that one.
+	later, err := publisherFor(repo).Publish(t.Context(), sandbox, Draft{Page: "home", Changes: []Change{change(t, "stats.patients", `12500`, `13000`)}}, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err = publisherFor(repo).Publish(t.Context(), sandbox, draft, ana)
+	if err != nil || again.SHA != later.SHA || again.Version != (release.Version{1, 0, 2}) || repo.made != 2 {
+		t.Errorf("Publish again = %+v, %v, made %d, want the later Publish %s at 1.0.2", again, err, repo.made, later.SHA)
+	}
+}
+
+// With no Publish of the page to follow, an already published Change is
+// what it would be without the rule.
+func TestADraftAlreadyPublishedWithNoPublishOfThePage(t *testing.T) {
+	repo := newRepo(t, sandboxFiles(t))
+	head := repo.head
+	_, err := publisherFor(repo).Publish(t.Context(), sandbox, Draft{Page: "home", Changes: []Change{
+		change(t, "hero.cta", `"Pide tu cita"`, `"Reserva tu cita"`),
+	}}, ana)
+	var conflicts *ConflictsError
+	if !errors.As(err, &conflicts) || !slices.Equal(conflicts.Paths, []string{"hero.cta"}) || repo.head != head {
+		t.Errorf("Publish: %v, want hero.cta as a Conflict, and no commit", err)
+	}
+
+	// Before and after alike, the Change merges.
+	published, err := publisherFor(repo).Publish(t.Context(), sandbox, Draft{Page: "home", Changes: []Change{
+		change(t, "hero.cta", `"Reserva tu cita"`, `"Reserva tu cita"`),
+	}}, ana)
+	if err != nil || repo.made != 1 || published.SHA != repo.head {
+		t.Errorf("Publish = %+v, %v, made %d, want one commit", published, err, repo.made)
 	}
 }
 
@@ -436,8 +546,28 @@ func TestACommitGitHubMadeWithoutTellingIsFoundAndNotMadeAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.made != 1 || published.SHA != repo.head || published.Version != "1.0.1" {
+	if repo.made != 1 || published.SHA != repo.head || published.Version != (release.Version{1, 0, 1}) {
 		t.Errorf("Publish = %+v, made %d, want the one commit at HEAD %s", published, repo.made, repo.head)
+	}
+}
+
+// Ticket 20's uncertain commit, which GitHub made without telling, and
+// which a Developer pushed on top of before the Publish read main again: the
+// Changes are already published, so the Publish answers with its commit
+// rather than with Conflicts.
+func TestACommitGitHubMadeWithoutTellingUnderAnotherIsFound(t *testing.T) {
+	repo := newRepo(t, sandboxFiles(t))
+	repo.answers = []answer{{landed: true, err: github.ErrUncertain}}
+	p := publisherFor(repo)
+	var landed string
+	p.wait = func(context.Context, int) error {
+		landed = repo.head
+		repo.push(map[string]string{"README.md": "# Fisio Sandbox"})
+		return nil
+	}
+	published, err := p.Publish(t.Context(), sandbox, Draft{Page: "home", Changes: []Change{change(t, "visit.price", `35`, `40`)}}, ana)
+	if err != nil || repo.made != 1 || published.SHA != landed || published.Version != (release.Version{1, 0, 1}) {
+		t.Errorf("Publish = %+v, %v, made %d, want the commit that landed, %s, at 1.0.1", published, err, repo.made, landed)
 	}
 }
 
@@ -531,7 +661,7 @@ func TestBumpPatchChangesTheVersionAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Replace(pkg, `"1.4.9"`, `"1.4.10"`, 1); version != "1.4.10" || string(bumped) != want {
+	if want := strings.Replace(pkg, `"1.4.9"`, `"1.4.10"`, 1); version != (release.Version{1, 4, 10}) || string(bumped) != want {
 		t.Errorf("bumpPatch = %s,\n%s\nwant 1.4.10,\n%s", version, bumped, want)
 	}
 	for _, broken := range []string{

@@ -12,7 +12,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
-// failures is the issue that tells the Developer of the Publishes whose
+// failures is the issue that reports to the Developer the Publishes whose
 // Release failed (V6).
 var failures = topic{
 	marker: "<!-- edity:release-failures -->",
@@ -22,13 +22,13 @@ var failures = topic{
 		"Each failure is a comment here while this issue is open. Close it once they are fixed: the next failure opens a new issue.",
 }
 
-// ReportFailure tells the Developer that a Publish failed, unless one of
-// the App's issues told it already: it comments on the Site's open failure
+// ReportFailure reports to the Developer that a Publish failed, unless one
+// of the App's issues told it already: it comments on the Site's open failure
 // issue, or opens one (V6). A failure is told once, by its ID: polled again
 // it tells nothing more, and the same run failing again on another attempt
 // is another failure.
 func (r *Reporter) ReportFailure(ctx context.Context, s site.Site, f progress.Failure) error {
-	return r.tell(ctx, s, failures, []string{f.ID}, func([]string) (writeup, error) {
+	return r.report(ctx, s, failures, []string{f.ID}, func([]string) (writeup, error) {
 		return writeup{text: failureText(f), keys: []string{f.ID}}, nil
 	})
 }

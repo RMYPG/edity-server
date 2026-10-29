@@ -14,6 +14,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/config"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -44,8 +45,8 @@ func TestProgressOnTheSandbox(t *testing.T) {
 	}
 
 	want := map[string]progress.Progress{
-		"4bc931076ac8583bd8905a4c508c987877afc09d": {Stage: progress.Released, Version: "1.0.1"},
-		"f50d2c45e28706d25da874225f0f64770cd1ac12": {Stage: progress.Released, Version: "1.0.2"},
+		"4bc931076ac8583bd8905a4c508c987877afc09d": {Stage: progress.Released, Version: release.Version{1, 0, 1}},
+		"f50d2c45e28706d25da874225f0f64770cd1ac12": {Stage: progress.Released, Version: release.Version{1, 0, 2}},
 	}
 	first := tracker()
 	for sha, w := range want {

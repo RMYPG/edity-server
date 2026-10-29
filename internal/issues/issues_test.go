@@ -1,10 +1,7 @@
 package issues
 
 import (
-	"bufio"
 	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -14,9 +11,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"net/textproto"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,7 +20,9 @@ import (
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/progress"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -49,87 +45,34 @@ var sandbox = site.Site{ID: "edity-sandbox", Repository: site.Repository{Owner: 
 // The failures progress tells of the two Publishes, had their runs failed.
 var (
 	ciFailed = progress.Failure{
-		SHA: first, Message: publishMessage, Version: "1.0.1",
+		SHA: first, Message: publishMessage, Version: release.Version{1, 0, 1},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure",
 		ID: "run:40934506192/1",
 	}
 	// ciFailedAgain is CI run again on the first Publish, and failing again.
 	ciFailedAgain = progress.Failure{
-		SHA: first, Message: publishMessage, Version: "1.0.1",
+		SHA: first, Message: publishMessage, Version: release.Version{1, 0, 1},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure",
 		ID: "run:40934506192/2",
 	}
 	releaseFailed = progress.Failure{
-		SHA: second, Message: publishMessage, Version: "1.0.2",
+		SHA: second, Message: publishMessage, Version: release.Version{1, 0, 2},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40935264906", Reason: "Release on Publish ended failure",
 		ID: "run:40935264906/1",
 	}
 	noCI = progress.Failure{
-		SHA: second, Message: publishMessage, Version: "1.0.2",
+		SHA: second, Message: publishMessage, Version: release.Version{1, 0, 2},
 		Reason: "no CI run 10 minutes after the commit",
 		ID:     "no-ci:" + second,
 	}
 )
 
-// A response is one of GitHub's answers.
-type response struct {
-	status int
-	header http.Header
-	body   []byte
-}
-
-// recorded reads an answer testdata/record.sh recorded: a status line,
-// headers and the body.
-func recorded(t testing.TB, name string) response {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := textproto.NewReader(bufio.NewReader(bytes.NewReader(data)))
-	line, err := r.ReadLine()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, code, _ := strings.Cut(line, " ")
-	status, err := strconv.Atoi(code[:3])
-	if err != nil {
-		t.Fatalf("%s: status line %q", name, line)
-	}
-	header, err := r.ReadMIMEHeader()
-	if err != nil {
-		t.Fatalf("%s: %v", name, err)
-	}
-	body, err := io.ReadAll(r.R)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return response{status: status, header: http.Header(header), body: body}
-}
-
-// edited is r with its JSON body changed by edit.
-func edited(t testing.TB, r response, edit func(body map[string]any)) response {
-	t.Helper()
-	var body map[string]any
-	dec := json.NewDecoder(bytes.NewReader(r.body))
-	dec.UseNumber()
-	if err := dec.Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	edit(body)
-	b, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return response{status: r.status, header: r.header, body: b}
-}
-
 // tagsUpTo is the recorded tag list down to the tags up to last.
-func tagsUpTo(t testing.TB, last string) response {
+func tagsUpTo(t testing.TB, last string) githubtest.Response {
 	t.Helper()
-	r := recorded(t, "tags.http")
+	r := githubtest.Recorded(t, "tags.http")
 	var refs []map[string]any
-	if err := json.Unmarshal(r.body, &refs); err != nil {
+	if err := json.Unmarshal(r.Body, &refs); err != nil {
 		t.Fatal(err)
 	}
 	for i, ref := range refs {
@@ -142,7 +85,7 @@ func tagsUpTo(t testing.TB, last string) response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return response{status: r.status, header: r.header, body: b}
+	return githubtest.Response{Status: r.Status, Header: r.Header, Body: b}
 }
 
 // fakeGitHub answers the App's calls on RMYPG/edity-sandbox: its GETs from
@@ -156,7 +99,7 @@ type fakeGitHub struct {
 	t *testing.T
 
 	mu      sync.Mutex
-	answers map[string]response
+	answers map[string]githubtest.Response
 	// shape is an item of an issue list as GitHub has it: pull request #4.
 	shape    map[string]any
 	issues   []*fakeIssue
@@ -164,7 +107,7 @@ type fakeGitHub struct {
 	// tick counts the writes, for each issue's updated_at.
 	tick int
 	// fail answers "<method> <path>" instead of the fake.
-	fail map[string]response
+	fail map[string]githubtest.Response
 	// slowList holds the issue list's answer back, so that calls at once
 	// would all list before any writes.
 	slowList time.Duration
@@ -186,29 +129,29 @@ const bot = "edity-publisher[bot]"
 
 func newFake(t *testing.T) *fakeGitHub {
 	t.Helper()
-	pull := recorded(t, "pull-4.http")
+	pull := githubtest.Recorded(t, "pull-4.http")
 	var shape map[string]any
-	if err := json.Unmarshal(pull.body, &shape); err != nil {
+	if err := json.Unmarshal(pull.Body, &shape); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeGitHub{
 		t:     t,
 		shape: shape,
-		answers: map[string]response{
+		answers: map[string]githubtest.Response{
 			"git/matching-refs/tags/v": tagsUpTo(t, "v1.0.0"),
 			// As it was before the second Publish.
-			"compare/v1.0.0..." + first: recorded(t, "compare-v1.0.0-4bc9310.http"),
-			"commits/" + developer:      recorded(t, "commit-7b2ba67.http"),
-			"commits/" + merge:          recorded(t, "commit-31077c3.http"),
+			"compare/v1.0.0..." + first: githubtest.Recorded(t, "compare-v1.0.0-4bc9310.http"),
+			"commits/" + developer:      githubtest.Recorded(t, "commit-7b2ba67.http"),
+			"commits/" + merge:          githubtest.Recorded(t, "commit-31077c3.http"),
 		},
 		// The sandbox's own pull request, which the issues API lists too.
 		issues:   []*fakeIssue{{number: 4, creator: "MarioRP-01", title: shape["title"].(string), body: shape["body"].(string), state: "open", pull: true}},
 		comments: map[int][]string{},
-		fail:     map[string]response{},
+		fail:     map[string]githubtest.Response{},
 		tokens:   map[string]bool{},
 	}
-	if issues := recorded(t, "issues.http"); string(bytes.TrimSpace(issues.body)) != "[]" {
-		t.Fatalf("the sandbox has issues of the App's: %s", issues.body)
+	if issues := githubtest.Recorded(t, "issues.http"); string(bytes.TrimSpace(issues.Body)) != "[]" {
+		t.Fatalf("the sandbox has issues of the App's: %s", issues.Body)
 	}
 	return f
 }
@@ -219,17 +162,9 @@ func (f *fakeGitHub) reporter(t *testing.T) *Reporter {
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	app := github.NewApp(5466528, testKey(), srv.URL, srv.Client())
+	app := github.NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
 	return New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 }
-
-var testKey = sync.OnceValue(func() *rsa.PrivateKey {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	return key
-})
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/RMYPG/edity-sandbox/issues") {
@@ -279,12 +214,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if failed, ok := f.fail[r.Method+" "+path]; ok {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(failed.status)
-		_, _ = w.Write(failed.body)
+		w.WriteHeader(failed.Status)
+		_, _ = w.Write(failed.Body)
 		return
 	}
 
-	var answer response
+	var answer githubtest.Response
 	switch {
 	case r.Method == http.MethodGet && path == "issues":
 		answer = f.list(r)
@@ -344,17 +279,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	etag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(append([]byte(token), answer.body...)))
+	etag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(append([]byte(token), answer.Body...)))
 	if r.Header.Get("If-None-Match") == etag {
 		f.notModified++
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Type", answer.header.Get("Content-Type"))
+	w.Header().Set("Content-Type", answer.Header.Get("Content-Type"))
 	w.Header().Set("ETag", etag)
-	w.WriteHeader(answer.status)
-	_, _ = w.Write(answer.body)
+	w.WriteHeader(answer.Status)
+	_, _ = w.Write(answer.Body)
 }
 
 // decode reads a write's JSON body, which may hold only the keys allowed.
@@ -379,7 +314,7 @@ func (f *fakeGitHub) issue(number string) *fakeIssue {
 }
 
 // list answers the issue list, as GitHub filters and sorts it.
-func (f *fakeGitHub) list(r *http.Request) response {
+func (f *fakeGitHub) list(r *http.Request) githubtest.Response {
 	q := r.URL.Query()
 	if q.Get("state") != "all" || q.Get("sort") != "updated" || q.Get("direction") != "desc" || q.Get("creator") == "" {
 		f.t.Errorf("issues listed with %s", r.URL.RawQuery)
@@ -397,7 +332,7 @@ func (f *fakeGitHub) list(r *http.Request) response {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return response{status: http.StatusOK, header: http.Header{"Content-Type": {"application/json; charset=utf-8"}}, body: b}
+	return githubtest.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"application/json; charset=utf-8"}}, Body: b}
 }
 
 // render is is as the issues API has an issue, or a pull request.
@@ -546,13 +481,13 @@ func TestAFailureSaysWhatFailedForWhichPublish(t *testing.T) {
 			"Edity end-to-end check published `home` in f50d2c45e28706d25da874225f0f64770cd1ac12, which changed:\n\n" +
 			"- `hero.cta`"},
 		{progress.Failure{
-			SHA: first, Version: "1.0.1", Reason: "CI ended failure", ID: "run:1/1",
+			SHA: first, Version: release.Version{1, 0, 1}, Reason: "CI ended failure", ID: "run:1/1",
 			Message: "content: publish home\n\nChanged:\n- hero.title\n- plans.1.price\n\nEdity-Client: @MarioRP-01 *Ana* <b>",
 		}, "### v1.0.1 was not released\n\n" +
 			"CI ended failure.\n\n" +
 			"\\@MarioRP-01 \\*Ana\\* \\<b\\> published `home` in 4bc931076ac8583bd8905a4c508c987877afc09d, which changed:\n\n" +
 			"- `hero.title`\n- `plans.1.price`"},
-		{progress.Failure{SHA: first, Version: "1.0.1", Reason: "CI ended failure", ID: "run:1/1", Message: "Not a Publish's"},
+		{progress.Failure{SHA: first, Version: release.Version{1, 0, 1}, Reason: "CI ended failure", ID: "run:1/1", Message: "Not a Publish's"},
 			"### v1.0.1 was not released\n\nCI ended failure.\n\nThe Publish is 4bc931076ac8583bd8905a4c508c987877afc09d."},
 	} {
 		if got := failureText(c.failure); got != c.want {
@@ -582,7 +517,7 @@ func TestTwoFailuresAtOnceOpenOneIssue(t *testing.T) {
 func TestAFailureIsToldOnlyOnceTheIssueIsWritten(t *testing.T) {
 	f := newFake(t)
 	r := f.reporter(t)
-	f.fail["POST issues"] = response{status: http.StatusBadGateway, body: []byte(`{"message": "Server Error"}`)}
+	f.fail["POST issues"] = githubtest.Response{Status: http.StatusBadGateway, Body: []byte(`{"message": "Server Error"}`)}
 	var gerr *github.Error
 	if err := r.ReportFailure(t.Context(), sandbox, ciFailed); !errors.As(err, &gerr) || gerr.Status != http.StatusBadGateway {
 		t.Fatalf("ReportFailure while GitHub fails: %v, want its 502", err)
@@ -593,7 +528,7 @@ func TestAFailureIsToldOnlyOnceTheIssueIsWritten(t *testing.T) {
 	}
 
 	// A comment not written is not told.
-	f.fail["POST issues/5/comments"] = response{status: http.StatusServiceUnavailable, body: []byte(`{"message": "Unavailable"}`)}
+	f.fail["POST issues/5/comments"] = githubtest.Response{Status: http.StatusServiceUnavailable, Body: []byte(`{"message": "Unavailable"}`)}
 	if err := r.ReportFailure(t.Context(), sandbox, releaseFailed); !errors.As(err, &gerr) || gerr.Status != http.StatusServiceUnavailable {
 		t.Fatalf("ReportFailure while comments fail: %v, want GitHub's 503", err)
 	}
@@ -601,7 +536,7 @@ func TestAFailureIsToldOnlyOnceTheIssueIsWritten(t *testing.T) {
 
 	// A comment written is told, even if the body that lists what was told
 	// could not be updated.
-	f.fail["PATCH issues/5"] = response{status: http.StatusBadGateway, body: []byte(`{"message": "Server Error"}`)}
+	f.fail["PATCH issues/5"] = githubtest.Response{Status: http.StatusBadGateway, Body: []byte(`{"message": "Server Error"}`)}
 	if err := r.ReportFailure(t.Context(), sandbox, releaseFailed); err != nil {
 		t.Fatalf("ReportFailure with the comment written: %v", err)
 	}
@@ -611,7 +546,7 @@ func TestAFailureIsToldOnlyOnceTheIssueIsWritten(t *testing.T) {
 
 	// Issues turned off on the repository: the Developer can't be told.
 	f = newFake(t)
-	f.fail["POST issues"] = response{status: http.StatusGone, body: []byte(`{"message": "Issues are disabled for this repo"}`)}
+	f.fail["POST issues"] = githubtest.Response{Status: http.StatusGone, Body: []byte(`{"message": "Issues are disabled for this repo"}`)}
 	if err := f.reporter(t).ReportFailure(t.Context(), sandbox, ciFailed); !errors.As(err, &gerr) || gerr.Status != http.StatusGone {
 		t.Errorf("ReportFailure with Issues turned off: %v, want GitHub's 410", err)
 	}

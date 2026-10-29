@@ -6,18 +6,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 )
 
 // firstPublish is the sandbox's first Publish of 2026-10-29.
-var firstPublish = publish.Published{SHA: first, Version: "1.0.1"}
+var firstPublish = publish.Published{SHA: first, Version: release.Version{1, 0, 1}}
 
 // shipsDeveloperCommits makes the last Release before the first Publish
 // v1.0.0 as if it had been cut before the Developer's last two commits, so
 // that the Publish ships them.
 func shipsDeveloperCommits(t *testing.T, f *fakeGitHub, sha string) {
 	t.Helper()
-	f.answers["compare/v1.0.0..."+sha] = recorded(t, "compare-0345f67-4bc9310.http")
+	f.answers["compare/v1.0.0..."+sha] = githubtest.Recorded(t, "compare-0345f67-4bc9310.http")
 }
 
 // theirFiles are the files both Developer commits change.
@@ -27,18 +29,18 @@ const theirFiles = "`Dockerfile`, `README.md`, `package.json` beyond its version
 func TestAPublishThatShipsDeveloperCommitsNotesThemOnce(t *testing.T) {
 	f := newFake(t)
 	shipsDeveloperCommits(t, f, first)
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil {
 		t.Fatal(err)
 	}
 	opened := f.opened()
 	if len(opened) != 1 || opened[0].title != "Edity: a Publish shipped commits that are not content" {
 		t.Fatalf("issues %+v, want one of Developer commits", opened)
 	}
-	note := "The Publish of v1.0.1, " + first + ", ships these commits:\n\n" +
+	report := "The Publish of v1.0.1, " + first + ", ships these commits:\n\n" +
 		"- " + developer + " build: take \\@edity/core and \\@edity/astro 0.1.0 from npm, by Mario Rojas Padron, changes " + theirFiles + "\n" +
 		"- " + merge + " Take \\@edity/core and \\@edity/astro 0.1.0 from npm (#3), by Mario Rojas Padrón, changes " + theirFiles
-	if !strings.Contains(opened[0].body, note) || !strings.Contains(opened[0].body, "<!-- edity:developer-commits -->") {
-		t.Errorf("the issue's body:\n%s\nwant it to note:\n%s", opened[0].body, note)
+	if !strings.Contains(opened[0].body, report) || !strings.Contains(opened[0].body, "<!-- edity:developer-commits -->") {
+		t.Errorf("the issue's body:\n%s\nwant it to report:\n%s", opened[0].body, report)
 	}
 	if told := toldOn(t, opened[0]); told != developer+" "+merge {
 		t.Errorf("the issue lists %q as told, want both commits", told)
@@ -46,12 +48,12 @@ func TestAPublishThatShipsDeveloperCommitsNotesThemOnce(t *testing.T) {
 
 	// Until the next Release, every Publish ships them, and none notes them
 	// again, nor reads them again.
-	second := publish.Published{SHA: second, Version: "1.0.2"}
+	second := publish.Published{SHA: second, Version: release.Version{1, 0, 2}}
 	shipsDeveloperCommits(t, f, second.SHA)
 	r := f.reporter(t)
 	for range 2 {
 		calls, _, writes := f.counts()
-		if err := r.NoteDeveloperCommits(t.Context(), sandbox, second); err != nil {
+		if err := r.ReportDeveloperCommits(t.Context(), sandbox, second); err != nil {
 			t.Fatal(err)
 		}
 		// The tags, the comparison and the issue list, or the issue list
@@ -64,9 +66,9 @@ func TestAPublishThatShipsDeveloperCommitsNotesThemOnce(t *testing.T) {
 		t.Errorf("issues %+v, with comments %q, want the one alone", f.opened(), f.commentsOn(opened[0].number))
 	}
 
-	// Closed, what it noted is not noted again.
+	// Closed, what it reported is not reported again.
 	f.close(opened[0].number)
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, second); err != nil || len(f.opened()) != 1 {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, second); err != nil || len(f.opened()) != 1 {
 		t.Errorf("noting them once the issue is closed: %v, issues %+v, want no new one", err, f.opened())
 	}
 }
@@ -74,7 +76,7 @@ func TestAPublishThatShipsDeveloperCommitsNotesThemOnce(t *testing.T) {
 func TestAPublishOfContentAloneNotesNothing(t *testing.T) {
 	f := newFake(t)
 	// As recorded: the Publish is the only commit since v1.0.0.
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil {
 		t.Fatal(err)
 	}
 	// The tags and the comparison.
@@ -92,14 +94,14 @@ func TestAPublishOfContentAloneNotesNothing(t *testing.T) {
 		}
 	}
 	for _, sha := range []string{developer, merge} {
-		f.answers["commits/"+sha] = edited(t, f.answers["commits/"+sha], contentOnly)
+		f.answers["commits/"+sha] = githubtest.Edited(t, f.answers["commits/"+sha], contentOnly)
 	}
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
 		t.Errorf("Developer commits of content: %v, issues %+v, want none", err, f.opened())
 	}
-	f.answers["compare/v1.0.0..."+first] = edited(t, f.answers["compare/v1.0.0..."+first], contentOnly)
+	f.answers["compare/v1.0.0..."+first] = githubtest.Edited(t, f.answers["compare/v1.0.0..."+first], contentOnly)
 	calls, _, _ := f.counts()
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
 		t.Errorf("Developer commits of content: %v, issues %+v, want none", err, f.opened())
 	}
 	if after, _, _ := f.counts(); after-calls != 2 {
@@ -110,7 +112,7 @@ func TestAPublishOfContentAloneNotesNothing(t *testing.T) {
 func TestASiteWithNoReleaseHasNothingToNote(t *testing.T) {
 	f := newFake(t)
 	delete(f.answers, "git/matching-refs/tags/v")
-	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
+	if err := f.reporter(t).ReportDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
 		t.Errorf("with no Release: %v, issues %+v, want nothing", err, f.opened())
 	}
 }
@@ -159,7 +161,7 @@ func TestANoteNamesTenFilesOfACommit(t *testing.T) {
 	c.Commit.Message = "fix: *the* page\n\nWhy."
 	c.Commit.Author.Name = "Mario"
 	want := "- " + developer + " fix: \\*the\\* page, by Mario, changes `f0`, `f1`, `f2`, `f3`, `f4`, `f5`, `f6`, `f7`, `f8`, `f9` and 2 more"
-	if got := commitNote(c, files); got != want {
-		t.Errorf("commitNote = %q, want %q", got, want)
+	if got := commitLine(c, files); got != want {
+		t.Errorf("commitLine = %q, want %q", got, want)
 	}
 }

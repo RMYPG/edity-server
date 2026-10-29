@@ -1,6 +1,6 @@
 // Package publish makes a Publish: it reads a page's content and Field
 // definitions from the Site repository at main HEAD, finds the Changes that
-// are Conflicts, merges the others, checks the content they make against
+// are Conflicts and those already published, merges the others, checks the content they make against
 // the Field definitions, and commits it on top of that HEAD with a patch
 // bump of package.json, which a workflow in the Site repository then cuts
 // as a Release (ADR-0003).
@@ -15,12 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -41,19 +43,24 @@ type Repository interface {
 	// *github.Repo does.
 	CreateCommit(ctx context.Context, c github.NewCommit) (string, error)
 	GitCommit(ctx context.Context, sha string) (github.GitCommit, error)
+	// Commits returns the newest commits from ref back that change the
+	// file at path, newest first.
+	Commits(ctx context.Context, ref, path string) ([]github.GitCommit, error)
 }
 
 // A Publisher makes Publishes. It is safe for concurrent use.
 type Publisher struct {
 	repository func(site.Repository) Repository
+	bot        func(context.Context) (string, error)
 	// wait pauses before a Publish reads main again.
 	wait func(ctx context.Context, attempt int) error
 }
 
 // New returns a Publisher that reaches a Site's repository through
-// repository.
-func New(repository func(site.Repository) Repository) *Publisher {
-	return &Publisher{repository: repository, wait: backOff}
+// repository, and tells its own commits by their author, the login bot
+// returns: the publisher App's.
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error)) *Publisher {
+	return &Publisher{repository: func(r site.Repository) Repository { return repository(r) }, bot: bot, wait: backOff}
 }
 
 // backOff waits a little longer before each new attempt.
@@ -108,11 +115,8 @@ func (d Draft) Check() error {
 		if c.Before == nil || c.After == nil {
 			return fmt.Errorf("the Change to %s has no value before or after", c.Path)
 		}
-		keys := strings.Split(c.Path, ".")
-		for _, key := range keys {
-			if key == "" {
-				return fmt.Errorf("%q is not a content path", c.Path)
-			}
+		if keys := content.Keys(c.Path); len(keys) == 0 || slices.Contains(keys, "") {
+			return fmt.Errorf("%q is not a content path", c.Path)
 		}
 		if paths[c.Path] {
 			return fmt.Errorf("two Changes to %s", c.Path)
@@ -120,7 +124,7 @@ func (d Draft) Check() error {
 		paths[c.Path] = true
 	}
 	for path := range paths {
-		keys := strings.Split(path, ".")
+		keys := content.Keys(path)
 		for n := 1; n < len(keys); n++ {
 			if outer := strings.Join(keys[:n], "."); paths[outer] {
 				return fmt.Errorf("a Change to %s inside the Change to %s", path, outer)
@@ -134,7 +138,7 @@ func (d Draft) Check() error {
 type Published struct {
 	SHA string
 	// Version is the version of the Release the commit becomes.
-	Version string
+	Version release.Version
 	// Conflicts are the paths of the Changes that did not merge.
 	Conflicts []string
 }
@@ -180,6 +184,13 @@ var ErrBusy = errors.New("main moved each time the Publish went to commit")
 // reasons. When main moves between reading it and committing, it reads main
 // again and starts over, and gives up with ErrBusy after a few attempts:
 // it never commits on a HEAD it did not read.
+//
+// A Change whose Field or List already holds its value after is already
+// published, whatever its value before, as when the Client missed the
+// answer to the Publish that made it and publishes again. It is not a
+// Conflict, and it has nothing to commit. When every Change of d is
+// already published, Publish commits nothing and returns the page's last
+// Publish, so that the Client can follow it.
 func (p *Publisher) Publish(ctx context.Context, s site.Site, d Draft, client Client) (Published, error) {
 	if err := d.Check(); err != nil {
 		return Published{}, err
@@ -206,9 +217,12 @@ func (p *Publisher) Publish(ctx context.Context, s site.Site, d Draft, client Cl
 				return published, nil
 			}
 		}
-		pl, err := prepare(ctx, repo, head, d, trailer)
+		pl, err := p.prepare(ctx, repo, head, d, trailer)
 		if err != nil {
 			return Published{}, err
+		}
+		if pl.done != nil {
+			return *pl.done, nil
 		}
 		sha, err := repo.CreateCommit(ctx, pl.commit)
 		switch {
@@ -247,11 +261,13 @@ func landed(ctx context.Context, repo Repository, head string, pl *plan) (Publis
 	return pl.published(head), true
 }
 
-// A plan is the commit a Publish makes on one HEAD.
+// A plan is the commit a Publish makes on one HEAD, or, when it has
+// nothing to commit, the Publish it answers with instead.
 type plan struct {
 	commit    github.NewCommit
-	version   string
+	version   release.Version
 	conflicts []string
+	done      *Published
 }
 
 func (pl *plan) published(sha string) Published {
@@ -259,7 +275,7 @@ func (pl *plan) published(sha string) Published {
 }
 
 // prepare reads the page at head and works out the commit d makes on it.
-func prepare(ctx context.Context, repo Repository, head string, d Draft, trailer string) (*plan, error) {
+func (p *Publisher) prepare(ctx context.Context, repo Repository, head string, d Draft, trailer string) (*plan, error) {
 	contentPath := "src/content/" + d.Page + ".json"
 	file, err := readFile(ctx, repo, contentPath, head)
 	if err != nil {
@@ -299,18 +315,44 @@ func prepare(ctx context.Context, repo Repository, head string, d Draft, trailer
 
 	var violations []fields.Violation
 	var conflicts, merged []string
+	// already counts the Changes already published, which the Field or List
+	// holds already: none is a Conflict, and none has anything to commit.
+	already := 0
 	for _, c := range d.Changes {
 		if defs.KindOf(c.Path) == fields.NotEditable {
 			violations = append(violations, fields.Violation{Path: c.Path, Limit: fields.Unknown})
 			continue
 		}
-		// A Change whose Field, List or Item is gone is one too.
-		if stored, ok := page.At(c.Path); !ok || !content.Equal(stored, c.Before) {
+		stored, ok := page.At(c.Path)
+		switch {
+		case ok && content.Equal(stored, c.After):
+			already++
+		case !ok || !content.Equal(stored, c.Before):
+			// A Change whose Field, List or Item is gone is a Conflict too.
 			conflicts = append(conflicts, c.Path)
-			continue
+		default:
+			page.Replace(c.Path, c.After)
+			merged = append(merged, c.Path)
 		}
-		page.Replace(c.Path, c.After)
-		merged = append(merged, c.Path)
+	}
+	if already == len(d.Changes) {
+		last, found, err := p.lastPublish(ctx, repo, head, contentPath)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return &plan{done: &last}, nil
+		}
+		// No Publish of the page to follow: each Change merges or is a
+		// Conflict by its value before alone.
+		for _, c := range d.Changes {
+			if stored, _ := page.At(c.Path); content.Equal(stored, c.Before) {
+				page.Replace(c.Path, c.After)
+				merged = append(merged, c.Path)
+			} else {
+				conflicts = append(conflicts, c.Path)
+			}
+		}
 	}
 	if len(merged) == 0 && len(violations) == 0 {
 		return nil, &ConflictsError{Paths: conflicts}
@@ -342,6 +384,33 @@ func prepare(ctx context.Context, repo Repository, head string, d Draft, trailer
 		version:   version,
 		conflicts: conflicts,
 	}, nil
+}
+
+// lastPublish returns the page's last Publish: the newest of the App's
+// commits from head back that change the page's content file, at the
+// version of its package.json. It returns false when there is none among
+// the commits that change it last.
+func (p *Publisher) lastPublish(ctx context.Context, repo Repository, head, contentPath string) (Published, bool, error) {
+	bot, err := p.bot(ctx)
+	if err != nil {
+		return Published{}, false, err
+	}
+	commits, err := repo.Commits(ctx, head, contentPath)
+	if err != nil {
+		return Published{}, false, err
+	}
+	for _, c := range commits {
+		if c.Author != bot {
+			continue
+		}
+		pkg, err := readFile(ctx, repo, "package.json", c.SHA)
+		if err != nil {
+			return Published{}, false, err
+		}
+		v, ok := release.VersionOf(pkg)
+		return Published{SHA: c.SHA, Version: v}, ok, nil
+	}
+	return Published{}, false, nil
 }
 
 // readFile returns nil for a file that is not there.

@@ -1,4 +1,4 @@
-// Package issues tells the Developer, on GitHub issues of a Site's
+// Package issues reports to the Developer, on GitHub issues of a Site's
 // repository, what they need to know of its Publishes: a Release that failed
 // (V6), and commits on main that a Publish ships and that change more than
 // content (V7).
@@ -63,8 +63,13 @@ const maxRemembered = 1000
 // New returns a Reporter that reaches a Site's repository through
 // repository, and tells the App's issues by their author, the login bot
 // returns: the publisher App's.
-func New(repository func(site.Repository) Repository, bot func(context.Context) (string, error), logger *slog.Logger) *Reporter {
-	return &Reporter{repository: repository, bot: bot, logger: logger, sites: map[string]*siteIssues{}}
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), logger *slog.Logger) *Reporter {
+	return &Reporter{
+		repository: func(r site.Repository) Repository { return repository(r) },
+		bot:        bot,
+		logger:     logger,
+		sites:      map[string]*siteIssues{},
+	}
 }
 
 func (r *Reporter) site(id string) *siteIssues {
@@ -152,11 +157,11 @@ type writeup struct {
 	keys []string
 }
 
-// tell makes sure that one of the App's issues of topic t on s's repository
-// tells the news of each key. It asks write what to say of those no issue
+// report makes sure that one of the App's issues of topic t on s's
+// repository tells the news of each key. It asks write what to say of those no issue
 // of t dealt with yet, and comments it on the topic's open issue, or opens
 // one with it.
-func (r *Reporter) tell(ctx context.Context, s site.Site, t topic, keys []string, write func(untold []string) (writeup, error)) error {
+func (r *Reporter) report(ctx context.Context, s site.Site, t topic, keys []string, write func(untold []string) (writeup, error)) error {
 	in := r.site(s.ID)
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -217,7 +222,7 @@ func (r *Reporter) tell(ctx context.Context, s site.Site, t topic, keys []string
 		if err := repo.Post(ctx, fmt.Sprintf("issues/%d/comments", open.Number), map[string]string{"body": w.text}, nil); err != nil {
 			return err
 		}
-		// The comment notifies the Developer, so the news is told. If the
+		// The comment reaches the Developer, so the news is told. If the
 		// body is not updated, a server that restarts may tell it again.
 		body := withTold(open.Body, append(toldIn(open.Body), w.keys...))
 		if err := repo.Patch(ctx, fmt.Sprintf("issues/%d", open.Number), map[string]string{"body": body}, nil); err != nil {

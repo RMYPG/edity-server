@@ -47,7 +47,7 @@ func TestPublishOnTheSandbox(t *testing.T) {
 	}
 	app := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 30 * time.Second})
 	repo := app.Repo(sandbox.Repository.Owner, sandbox.Repository.Name)
-	p := publish.New(func(site.Repository) publish.Repository { return repo })
+	p := publish.New(func(site.Repository) publish.Repository { return repo }, app.BotLogin)
 	client := publish.Client{Name: "Edity end-to-end check"}
 	bot, err := app.BotLogin(ctx)
 	if err != nil {
@@ -183,7 +183,7 @@ func publishAndRelease(t *testing.T, repo *github.Repo, p *publish.Publisher, s 
 func waitForRelease(ctx context.Context, t *testing.T, repo *github.Repo, published publish.Published) error {
 	ctx, cancel := context.WithTimeout(ctx, releaseTimeout)
 	defer cancel()
-	tag := "v" + published.Version
+	tag := "v" + published.Version.String()
 	ciPassed := false
 	for {
 		if !ciPassed {

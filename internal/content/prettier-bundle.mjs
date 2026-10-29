@@ -1,13 +1,19 @@
-// Reads, from the bundle of the Prettier installed in the current directory,
-// what Prettier measures a line's width with (getStringWidth in its
+// Reads, from the bundle of an edity checkout's Prettier, the one the Sites
+// use, what Prettier measures a line's width with (getStringWidth in its
 // src/utilities/get-string-width.js), which decides where it breaks a line
 // of a content file. It fails if getStringWidth is not the one width.go
 // ports. emoji.mjs writes emoji.go from it, and testdata/prettier.mjs tests
-// width.go with the emoji it matches.
+// width.go with the emoji it matches. Both take the path of the edity
+// checkout as their argument.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const prettier = join(process.cwd(), 'node_modules/prettier');
+// The edity checkout the generator was given.
+export const edity = process.argv[2];
+if (!edity) {
+  throw new Error('Give the path of an edity checkout with its npm dependencies installed.');
+}
+const prettier = join(edity, 'node_modules/prettier');
 export const { version } = JSON.parse(readFileSync(join(prettier, 'package.json'), 'utf8'));
 const bundle = readFileSync(join(prettier, 'index.mjs'), 'utf8');
 

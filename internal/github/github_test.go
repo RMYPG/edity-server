@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"crypto"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,19 +12,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-)
 
-var testKey = sync.OnceValue(func() *rsa.PrivateKey {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	return key
-})
+	"github.com/RMYPG/edity-server/internal/githubtest"
+)
 
 // fakeGitHub answers the calls the App makes on RMYPG/edity-sandbox, as
 // GitHub documents them, and checks how each is authenticated.
@@ -69,7 +63,7 @@ func newFake(t *testing.T) (*fakeGitHub, *App) {
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	app := NewApp(5466528, testKey(), srv.URL, srv.Client())
+	app := NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
 	app.now = func() time.Time {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -159,6 +153,23 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			"committer": map[string]any{"name": "GitHub", "email": "noreply@github.com", "date": "2026-10-29T11:59:00Z"},
 			"parents":   []map[string]any{{"sha": "1111000000000000000000000000000000000000"}},
 		})
+	case r.Method == http.MethodGet && r.URL.Path == "/repos/RMYPG/edity-sandbox/commits":
+		q := r.URL.Query()
+		if q.Get("sha") != f.head || q.Get("path") != "src/content/home.json" {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		// As GitHub lists commits, newest first, with what the App reads.
+		writeJSON(w, http.StatusOK, []map[string]any{{
+			"sha": f.head,
+			"commit": map[string]any{
+				"message":   "content: publish home\n\nEdity-Client: Ana",
+				"author":    map[string]any{"name": "edity-publisher[bot]", "email": "347795330+edity-publisher[bot]@users.noreply.github.com", "date": "2026-10-29T11:59:00Z"},
+				"committer": map[string]any{"name": "GitHub", "email": "noreply@github.com", "date": "2026-10-29T11:59:00Z"},
+			},
+			"author":  map[string]any{"login": "edity-publisher[bot]", "type": "Bot"},
+			"parents": []map[string]any{{"sha": "1111000000000000000000000000000000000000"}},
+		}})
 	case (r.Method == http.MethodPost || r.Method == http.MethodPatch) && strings.HasPrefix(r.URL.Path, "/repos/RMYPG/edity-sandbox/issues"):
 		if r.Header.Get("Content-Type") != "application/json" {
 			f.t.Errorf("%s %s sent as %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
@@ -223,7 +234,7 @@ func (f *fakeGitHub) checkJWT(token string) {
 	}
 	signature, _ := base64.RawURLEncoding.DecodeString(parts[2])
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err := rsa.VerifyPKCS1v15(&testKey().PublicKey, crypto.SHA256, digest[:], signature); err != nil {
+	if err := rsa.VerifyPKCS1v15(&githubtest.Key().PublicKey, crypto.SHA256, digest[:], signature); err != nil {
 		f.t.Errorf("the JWT's signature: %v", err)
 	}
 	var header struct{ Alg string }
@@ -463,6 +474,22 @@ func TestGitCommit(t *testing.T) {
 	}
 	if _, err := app.Repo("RMYPG", "edity-sandbox").GitCommit(context.Background(), "2222000000000000000000000000000000000000"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GitCommit of no commit: %v, want ErrNotFound", err)
+	}
+}
+
+func TestCommitsListsTheCommitsThatChangeAFile(t *testing.T) {
+	f, app := newFake(t)
+	repo := app.Repo("RMYPG", "edity-sandbox")
+	commits, err := repo.Commits(t.Context(), f.head, "src/content/home.json")
+	if err != nil || len(commits) != 1 {
+		t.Fatalf("Commits = %+v, %v", commits, err)
+	}
+	if c := commits[0]; c.SHA != f.head || c.Author != "edity-publisher[bot]" || c.Message != "content: publish home\n\nEdity-Client: Ana" ||
+		!slices.Equal(c.Parents, []string{"1111000000000000000000000000000000000000"}) || !c.Committed.Equal(time.Date(2026, 10, 29, 11, 59, 0, 0, time.UTC)) {
+		t.Errorf("Commits = %+v", commits)
+	}
+	if commits, err := repo.Commits(t.Context(), f.head, "src/content/about.json"); err != nil || len(commits) != 0 {
+		t.Errorf("Commits of a file no commit changes = %+v, %v", commits, err)
 	}
 }
 

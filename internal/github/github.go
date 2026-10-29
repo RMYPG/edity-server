@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -173,17 +174,21 @@ func (r *Repo) String() string {
 	return r.owner + "/" + r.name
 }
 
-// token returns an installation access token for the repository.
-func (r *Repo) token(ctx context.Context) (string, error) {
-	a := r.app
+// installation returns what the App holds of its installation on r.
+func (a *App) installation(r *Repo) *installation {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	in, ok := a.repos[r.String()]
 	if !ok {
 		in = &installation{}
 		a.repos[r.String()] = in
 	}
-	a.mu.Unlock()
+	return in
+}
 
+// token returns an installation access token for the repository r.
+func (a *App) token(ctx context.Context, r *Repo) (string, error) {
+	in := a.installation(r)
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.token != "" && a.now().Before(in.expires.Add(-5*time.Minute)) {
@@ -224,14 +229,9 @@ func (r *Repo) token(ctx context.Context) (string, error) {
 	return in.token, nil
 }
 
-// forget drops a token GitHub no longer takes.
-func (r *Repo) forget(token string) {
-	r.app.mu.Lock()
-	in := r.app.repos[r.String()]
-	r.app.mu.Unlock()
-	if in == nil {
-		return
-	}
+// forget drops a token for the repository r that GitHub no longer takes.
+func (a *App) forget(r *Repo, token string) {
+	in := a.installation(r)
 	in.mu.Lock()
 	if in.token == token {
 		in.token = ""
@@ -262,14 +262,14 @@ func (r *Repo) do(ctx context.Context, req request) (answer, error) {
 		}
 	}
 	for attempt := 0; ; attempt++ {
-		token, err := r.token(ctx)
+		token, err := r.app.token(ctx, r)
 		if err != nil {
 			return answer{}, err
 		}
 		req.auth = token
 		a, err := r.app.send(ctx, req)
 		if err == nil && a.status == http.StatusUnauthorized && attempt == 0 {
-			r.forget(token)
+			r.app.forget(r, token)
 			continue
 		}
 		if err == nil && req.method == http.MethodGet {
@@ -353,6 +353,16 @@ func (r *Repo) File(ctx context.Context, path, ref string) ([]byte, error) {
 	return a.body, nil
 }
 
+// shaPattern is a commit's full sha in lowercase hex, as the OpenAPI file's
+// pattern has it.
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// IsSHA tells whether s is a commit's full sha, as Publish answers it. Such
+// a sha goes into a call's path or query as it is.
+func IsSHA(s string) bool {
+	return shaPattern.MatchString(s)
+}
+
 // A GitCommit is a commit as Git has it.
 type GitCommit struct {
 	SHA     string
@@ -389,6 +399,39 @@ func (r *Repo) GitCommit(ctx context.Context, sha string) (GitCommit, error) {
 		c.Parents = append(c.Parents, p.SHA)
 	}
 	return c, nil
+}
+
+// Commits returns the newest commits from ref back that change the file at
+// path, newest first, as GitHub lists them: at most 30.
+func (r *Repo) Commits(ctx context.Context, ref, path string) ([]GitCommit, error) {
+	var listed []struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Message string `json:"message"`
+			Author  struct {
+				Name string `json:"name"`
+			} `json:"author"`
+			Committer struct {
+				Date time.Time `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
+	}
+	query := url.Values{"sha": {ref}, "path": {path}, "per_page": {"30"}}
+	if err := r.get(ctx, "/repos/"+r.path("commits")+"?"+query.Encode(), &listed); err != nil {
+		return nil, err
+	}
+	commits := make([]GitCommit, 0, len(listed))
+	for _, l := range listed {
+		c := GitCommit{SHA: l.SHA, Message: l.Commit.Message, Author: l.Commit.Author.Name, Committed: l.Commit.Committer.Date}
+		for _, p := range l.Parents {
+			c.Parents = append(c.Parents, p.SHA)
+		}
+		commits = append(commits, c)
+	}
+	return commits, nil
 }
 
 // request is one call to GitHub.

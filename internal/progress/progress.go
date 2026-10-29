@@ -13,27 +13,35 @@
 //   - released once the highest vX.Y.Z tag contains it, whether that is the
 //     commit's own Release or a newer one (P8);
 //   - failed when one of its CI runs or its Release on Publish run failed,
-//     or when nothing came of it in time.
+//     or when nothing came of it in time: no CI run some minutes after the
+//     commit, or, on a Site whose Release on Publish runs are named after
+//     their commits, no Release some time after CI passed while none of
+//     those runs is under way. A Site whose runs are not named yet releases
+//     the commit by its tag alone, with no deadline: no run there tells
+//     whether this commit's Release is still to come. A CI run that GitHub
+//     keeps queued leaves the commit validating, with no deadline either:
+//     it starts once a runner is free, or the Developer cancels it, which
+//     fails the Publish.
 //
 // The Editor tells the Client of a failed Publish that the Developer has
 // been notified (P5), so a Tracker answers failed only once its Reporter
-// has told the Developer (V6).
+// has reported the failure to the Developer (V6). Its sweeps ask after
+// each Site's Publishes since its last Release every few minutes, so that a
+// failure is reported even when no Client asks about it.
 //
 // Deploying and live are ticket 33's.
 package progress
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -53,7 +61,7 @@ type Progress struct {
 	Stage Stage
 	// Version is the version of the Release the commit becomes: the one in
 	// its package.json.
-	Version string
+	Version release.Version
 	// Run is the address of the run that made the Publish fail, when one
 	// did, and Reason says what failed, for the Developer.
 	Run    string
@@ -64,24 +72,25 @@ type Progress struct {
 // commit of its repository, or one that the publisher App did not author.
 var ErrNotPublish = errors.New("not the commit of a Publish")
 
-// A Failure is a Publish that failed, as the Developer is told of it.
+// A Failure is a Publish that failed, as it is reported to the Developer.
 type Failure struct {
 	// SHA is the Publish's commit, Message its commit message, and Version
 	// the version of the Release it was to become.
-	SHA, Message, Version string
+	SHA, Message string
+	Version      release.Version
 	// Run is the address of the run that failed, when one did, and Reason
 	// says what failed.
 	Run, Reason string
 	// ID tells this failure from every other on the Site, so that it is
-	// told once: the run that failed and its attempt, or the deadline the
+	// reported once: the run that failed and its attempt, or the deadline the
 	// commit missed. It has no spaces.
 	ID string
 }
 
-// A Reporter tells the Developer that a Publish failed (V6).
+// A Reporter reports to the Developer that a Publish failed (V6).
 // *issues.Reporter is one.
 type Reporter interface {
-	// ReportFailure returns nil once the Developer has been told of f,
+	// ReportFailure returns nil once f has been reported to the Developer,
 	// whether now or earlier.
 	ReportFailure(ctx context.Context, s site.Site, f Failure) error
 }
@@ -105,8 +114,10 @@ const (
 	// workflow is disabled.
 	ciDeadline = 10 * time.Minute
 	// releaseDeadline is how long after CI passed a Publish waits for a
-	// Release to contain it, while no Release on Publish run of it is under
-	// way: one that was skipped, cancelled or never named after the commit.
+	// Release to contain it, on a Site whose Release on Publish runs are
+	// named after their commits, while none of them is under way: its own
+	// was skipped or cancelled, or never started. Any run under way may
+	// still release it, as a newer Release.
 	releaseDeadline = 30 * time.Minute
 	// lookTimeout bounds one look at GitHub.
 	lookTimeout = 20 * time.Second
@@ -118,9 +129,6 @@ const (
 // later Publish's commit, so it says nothing about which Publish it
 // releases.
 const releaseRuns = "actions/workflows/release-on-publish.yml/runs?event=workflow_run&per_page=20"
-
-// shaPattern is a commit's full sha, as Publish answers it.
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // A Tracker works out the progress of Publishes. It is safe for concurrent
 // use.
@@ -148,10 +156,16 @@ type look struct {
 // New returns a Tracker that reaches a Site's repository through
 // repository, and tells a Publish's commit by its author, the login bot
 // returns: the publisher App's. It answers that a Publish failed only once
-// reporter has told the Developer (P5). A nil reporter tells no one, for
-// what only reads, such as mise run check:progress.
-func New(repository func(site.Repository) Repository, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
-	return &Tracker{repository: repository, bot: bot, reporter: reporter, now: time.Now, recent: map[key]*look{}}
+// reporter has reported it to the Developer (P5). A nil reporter reports
+// nothing, for what only reads, such as mise run check:progress.
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
+	return &Tracker{
+		repository: func(r site.Repository) Repository { return repository(r) },
+		bot:        bot,
+		reporter:   reporter,
+		now:        time.Now,
+		recent:     map[key]*look{},
+	}
 }
 
 // Progress returns how far the Publish whose commit is sha has got on s, or
@@ -159,7 +173,7 @@ func New(repository func(site.Repository) Repository, bot func(context.Context) 
 // look at GitHub.
 func (t *Tracker) Progress(ctx context.Context, s site.Site, sha string) (Progress, error) {
 	// It goes into the calls' paths and queries as it is.
-	if !shaPattern.MatchString(sha) {
+	if !github.IsSHA(sha) {
 		return Progress{}, fmt.Errorf("%q is not a sha: %w", sha, ErrNotPublish)
 	}
 	k := key{s.ID, sha}
@@ -195,7 +209,7 @@ func (t *Tracker) look(ctx context.Context, s site.Site, sha string, k key, l *l
 		// The Editor tells the Client that the Developer has been notified,
 		// so that has to be true before the answer is.
 		if err = t.reporter.ReportFailure(ctx, s, *failure); err != nil {
-			p, err = Progress{}, fmt.Errorf("telling the Developer that %s failed: %w", sha, err)
+			p, err = Progress{}, fmt.Errorf("reporting that %s failed: %w", sha, err)
 		}
 	}
 	t.mu.Lock()
@@ -209,7 +223,7 @@ func (t *Tracker) look(ctx context.Context, s site.Site, sha string, k key, l *l
 }
 
 // workOut asks GitHub where the commit sha is, and, when the Publish
-// failed, what the Developer is to be told.
+// failed, what to report to the Developer.
 func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progress, *Failure, error) {
 	repo := t.repository(s.Repository)
 	bot, err := t.bot(ctx)
@@ -233,11 +247,11 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 	if err != nil {
 		return Progress{}, nil, err
 	}
-	v, ok := versionOf(pkg)
+	v, ok := release.VersionOf(pkg)
 	if !ok {
 		return Progress{}, nil, fmt.Errorf("%s's package.json has no X.Y.Z version: %w", sha, ErrNotPublish)
 	}
-	p := Progress{Version: v.String()}
+	p := Progress{Version: v}
 	failed := func(run, reason, id string) (Progress, *Failure, error) {
 		p.Stage, p.Run, p.Reason = Failed, run, reason
 		return p, &Failure{SHA: sha, Message: commit.Message, Version: p.Version, Run: run, Reason: reason, ID: id}, nil
@@ -270,14 +284,14 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 		return p, nil, nil
 	}
 
-	var release runs
-	if err := repo.Get(ctx, releaseRuns, &release); err != nil && !errors.Is(err, github.ErrNotFound) {
+	var releases runs
+	if err := repo.Get(ctx, releaseRuns, &releases); err != nil && !errors.Is(err, github.ErrNotFound) {
 		return Progress{}, nil, err
 	}
 	// The newest run for the commit since its CI last started: an older one
 	// is from a CI run that has been run again since.
 	title := "Release " + sha
-	for _, r := range release.Runs {
+	for _, r := range releases.Runs {
 		if r.DisplayTitle != title || r.CreatedAt.Before(ci.lastStarted()) {
 			continue
 		}
@@ -290,7 +304,7 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 		}
 		break
 	}
-	if now.Sub(ci.lastUpdated()) > releaseDeadline {
+	if releases.named() && !releases.underWay() && now.Sub(ci.lastUpdated()) > releaseDeadline {
 		// By when CI last started: CI run again, passing again with still no
 		// Release after it, is another failure.
 		return failed("", fmt.Sprintf("no Release %d minutes after CI passed", int(releaseDeadline.Minutes())),
@@ -304,12 +318,12 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 // whose version is v. Tags go on main's commits with rising versions, so a
 // Release older than v can't contain it, and the highest tells for every
 // other.
-func releasedIn(ctx context.Context, repo Repository, sha string, v version) (bool, error) {
+func releasedIn(ctx context.Context, repo Repository, sha string, v release.Version) (bool, error) {
 	highest, tagged, err := highestRelease(ctx, repo)
 	if err != nil {
 		return false, err
 	}
-	if !tagged || highest.less(v) {
+	if !tagged || highest.Less(v) {
 		return false, nil
 	}
 	var compared struct {
@@ -335,22 +349,22 @@ func LastRelease(ctx context.Context, repo Repository) (string, error) {
 
 // highestRelease returns the version of the highest vX.Y.Z tag, and false
 // when there is none.
-func highestRelease(ctx context.Context, repo Repository) (version, bool, error) {
+func highestRelease(ctx context.Context, repo Repository) (release.Version, bool, error) {
 	var refs []struct {
 		Ref string `json:"ref"`
 	}
 	err := repo.Get(ctx, "git/matching-refs/tags/v", &refs)
 	if errors.Is(err, github.ErrNotFound) {
-		return version{}, false, nil
+		return release.Version{}, false, nil
 	}
 	if err != nil {
-		return version{}, false, err
+		return release.Version{}, false, err
 	}
-	var highest version
+	var highest release.Version
 	tagged := false
 	for _, ref := range refs {
 		tag, ok := strings.CutPrefix(ref.Ref, "refs/tags/v")
-		if w, isVersion := parseVersion(tag); ok && isVersion && (!tagged || highest.less(w)) {
+		if w, isVersion := release.ParseVersion(tag); ok && isVersion && (!tagged || highest.Less(w)) {
 			highest, tagged = w, true
 		}
 	}
@@ -406,6 +420,20 @@ func (rs runs) failed() *run {
 	return nil
 }
 
+// named tells whether the Site's Release on Publish workflow names its runs
+// after the commits they release, "Release <sha>", as the Site template's
+// does since RMYPG/static-astro-site-template#15: one of the runs is.
+func (rs runs) named() bool {
+	for _, r := range rs.Runs {
+		if sha, ok := strings.CutPrefix(r.DisplayTitle, "Release "); ok && github.IsSHA(sha) {
+			return true
+		}
+	}
+	return false
+}
+
+// underWay tells whether any of the runs has yet to complete: it is queued,
+// waiting or in progress.
 func (rs runs) underWay() bool {
 	for _, r := range rs.Runs {
 		if r.Status != "completed" {
@@ -435,49 +463,4 @@ func (rs runs) lastUpdated() time.Time {
 		}
 	}
 	return last
-}
-
-// A version is a Release's version, X.Y.Z.
-type version [3]uint64
-
-var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-
-func parseVersion(s string) (version, bool) {
-	parts := versionPattern.FindStringSubmatch(s)
-	if parts == nil {
-		return version{}, false
-	}
-	var v version
-	for i := range v {
-		n, err := strconv.ParseUint(parts[i+1], 10, 64)
-		if err != nil {
-			return version{}, false
-		}
-		v[i] = n
-	}
-	return v, true
-}
-
-// versionOf reads the version of a package.json.
-func versionOf(pkg []byte) (version, bool) {
-	var p struct {
-		Version string `json:"version"`
-	}
-	if json.Unmarshal(pkg, &p) != nil {
-		return version{}, false
-	}
-	return parseVersion(p.Version)
-}
-
-func (v version) less(w version) bool {
-	for i := range v {
-		if v[i] != w[i] {
-			return v[i] < w[i]
-		}
-	}
-	return false
-}
-
-func (v version) String() string {
-	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
 }

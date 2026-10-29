@@ -15,8 +15,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
 
+	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity/contracts"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -139,19 +139,18 @@ const (
 // Items the List holds in the content.
 func (d *Definitions) KindOf(path string) Kind {
 	s := d.schema
-	if path != "" {
-		for key := range strings.SplitSeq(path, ".") {
-			switch {
-			case is(s, "object"):
-				s = s.Properties[key]
-			case is(s, "array") && isIndex(key):
-				s = s.Items2020
-			default:
-				s = nil
-			}
-			if s == nil {
-				return NotEditable
-			}
+	for _, key := range content.Keys(path) {
+		_, isIndex := content.Index(key)
+		switch {
+		case is(s, "object"):
+			s = s.Properties[key]
+		case is(s, "array") && isIndex:
+			s = s.Items2020
+		default:
+			s = nil
+		}
+		if s == nil {
+			return NotEditable
 		}
 	}
 	switch {
@@ -171,18 +170,4 @@ func is(s *jsonschema.Schema, t string) bool {
 	}
 	types := s.Types.ToStrings()
 	return len(types) == 1 && types[0] == t
-}
-
-// isIndex tells whether key is an Item's index, written as the Editor writes
-// it: digits with no leading zero, so that one Item has one path.
-func isIndex(key string) bool {
-	if key == "" || (key[0] == '0' && len(key) > 1) {
-		return false
-	}
-	for _, r := range key {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }

@@ -14,13 +14,13 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -46,10 +46,10 @@ type Publisher interface {
 	Publish(ctx context.Context, s site.Site, d publish.Draft, client publish.Client) (publish.Published, error)
 }
 
-// A Notifier tells the Developer of the commits a Publish ships that are
+// A Reporter reports to the Developer the commits a Publish ships that are
 // not content (V7). *issues.Reporter is one.
-type Notifier interface {
-	NoteDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error
+type Reporter interface {
+	ReportDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error
 }
 
 // maxPublishBody bounds a Publish's body. A whole page's content is a few
@@ -65,15 +65,15 @@ const publishTimeout = 50 * time.Second
 // moving under a Publish.
 const busyRetry = 10 * time.Second
 
-// noteTimeout bounds noting what a Publish shipped, which runs once the
-// Publish is answered.
-const noteTimeout = time.Minute
+// reportTimeout bounds reporting what a Publish shipped, which runs once
+// the Publish is answered.
+const reportTimeout = time.Minute
 
 type publishHandler struct {
 	sessions  Sessions
 	publisher Publisher
-	// notifier is nil when nothing notes what a Publish ships.
-	notifier Notifier
+	// reporter is nil when nothing reports what a Publish ships.
+	reporter Reporter
 	limit    *limiter
 	logger   *slog.Logger
 }
@@ -81,7 +81,7 @@ type publishHandler struct {
 // ServeHTTP answers POST /_edity/api/publish.
 func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s, _ := site.FromContext(r.Context())
-	if !sameOrigin(r) {
+	if !fromSite(r, s) {
 		http.Error(w, "The request does not come from the Site's own origin.", http.StatusForbidden)
 		return
 	}
@@ -127,26 +127,26 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.LogAttrs(r.Context(), slog.LevelInfo, "published",
 		slog.String("site", s.ID), slog.String("page", draft.Page),
-		slog.String("sha", published.SHA), slog.String("version", published.Version),
+		slog.String("sha", published.SHA), slog.String("version", published.Version.String()),
 		slog.Int("conflicts", len(published.Conflicts)))
 	answer := struct {
-		SHA       string     `json:"sha"`
-		Version   string     `json:"version"`
-		Conflicts []conflict `json:"conflicts,omitempty"`
+		SHA       string          `json:"sha"`
+		Version   release.Version `json:"version"`
+		Conflicts []conflict      `json:"conflicts,omitempty"`
 	}{published.SHA, published.Version, conflicts(published.Conflicts)}
 	writeJSON(w, http.StatusAccepted, answer)
-	if h.notifier != nil {
+	if h.reporter != nil {
 		// Apart from the Publish, which it neither delays nor fails.
-		go h.note(context.WithoutCancel(r.Context()), s, published)
+		go h.report(context.WithoutCancel(r.Context()), s, published)
 	}
 }
 
-// note notes the Developer commits that published ships, if any.
-func (h *publishHandler) note(ctx context.Context, s site.Site, published publish.Published) {
-	ctx, cancel := context.WithTimeout(ctx, noteTimeout)
+// report reports the Developer commits that published ships, if any.
+func (h *publishHandler) report(ctx context.Context, s site.Site, published publish.Published) {
+	ctx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	if err := h.notifier.NoteDeveloperCommits(ctx, s, published); err != nil {
-		h.logger.LogAttrs(ctx, slog.LevelWarn, "Developer commits not noted",
+	if err := h.reporter.ReportDeveloperCommits(ctx, s, published); err != nil {
+		h.logger.LogAttrs(ctx, slog.LevelWarn, "Developer commits not reported",
 			slog.String("site", s.ID), slog.String("sha", published.SHA), slog.String("error", err.Error()))
 	}
 }
@@ -157,7 +157,6 @@ func (h *publishHandler) fail(w http.ResponseWriter, r *http.Request, s site.Sit
 		inConflict *publish.ConflictsError
 		violations *publish.ViolationsError
 		broken     *publish.BrokenError
-		limited    *github.Error
 	)
 	switch {
 	case errors.As(err, &inConflict):
@@ -180,14 +179,8 @@ func (h *publishHandler) fail(w http.ResponseWriter, r *http.Request, s site.Sit
 	case errors.Is(err, publish.ErrBusy):
 		w.Header().Set("Retry-After", seconds(busyRetry))
 		http.Error(w, "The Site repository's main kept moving: publish again in a moment.", http.StatusServiceUnavailable)
-	case errors.As(err, &limited) && limited.RetryAfter > 0:
-		w.Header().Set("Retry-After", seconds(limited.RetryAfter))
-		http.Error(w, "GitHub is limiting the server's requests: publish again later.", http.StatusServiceUnavailable)
-	case errors.As(err, &limited) && limited.Status < 500:
-		// GitHub refused the App: its permissions or installation are wrong.
-		http.Error(w, "GitHub refused the publisher App: the Developer has to fix it.", http.StatusInternalServerError)
 	default:
-		http.Error(w, "GitHub could not be reached: publish again later.", http.StatusServiceUnavailable)
+		failedOnGitHub(w, err, "publish again")
 	}
 }
 
@@ -226,16 +219,29 @@ func readDraft(body []byte) (publish.Draft, error) {
 	return d, nil
 }
 
-// sameOrigin tells whether r comes from a page on the Site's own origin, its
-// scheme and the host it was sent to (A4). A browser sends Origin with
-// every POST.
-func sameOrigin(r *http.Request) bool {
+// fromSite tells whether r comes from a page of s, by its Origin (A4): one
+// of the Site's hostnames over https, on any port, or over http only for a
+// loopback hostname such as localhost, which a Site has in development
+// (sites.dev.json). The request's own scheme says nothing of the page's:
+// behind Cloudflare Tunnel the server sees every request over http. A
+// browser sends Origin with every POST.
+func fromSite(r *http.Request, s site.Site) bool {
 	origin, err := url.Parse(r.Header.Get("Origin"))
-	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") ||
-		origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+	if err != nil || origin.Host == "" || origin.Opaque != "" || origin.User != nil ||
+		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return false
 	}
-	return strings.EqualFold(origin.Host, r.Host)
+	host := origin.Hostname()
+	switch origin.Scheme {
+	case "https":
+	case "http":
+		if !site.IsLoopback(host) {
+			return false
+		}
+	default:
+		return false
+	}
+	return s.HasHostname(host)
 }
 
 type conflict struct {

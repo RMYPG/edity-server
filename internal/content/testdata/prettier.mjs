@@ -1,20 +1,17 @@
 // Writes prettier.json: what Prettier, as a Site's CI runs it, makes of the
 // content the Go tests format, of the text they measure, and of the numbers
 // they write as JavaScript does. Each case is generated here, with a fixed
-// seed, and Prettier's own answer recorded.
+// seed, and Prettier's own answer recorded, from the Prettier of the edity
+// checkout it is given, the one the Sites use. Run it with
 //
-// Run it, from this repository's root, in a checkout that has the Prettier
-// the Sites use installed, such as the edity repository, with that
-// checkout's Node:
-//
-//   mise -C <edity> exec -- node "$PWD/internal/content/testdata/prettier.mjs" \
-//     > internal/content/testdata/prettier.json
+//   mise run record:prettier <edity>
 import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { emojiStrings, version } from '../prettier-bundle.mjs';
+import { edity, emojiStrings, version } from '../prettier-bundle.mjs';
 
 const prettier = await import(
-  pathToFileURL(join(process.cwd(), 'node_modules/prettier/index.mjs')).href
+  pathToFileURL(join(edity, 'node_modules/prettier/index.mjs')).href
 );
 const width = prettier.util.getStringWidth;
 
@@ -236,7 +233,7 @@ const written = `{
 
 // One case per line, so that a diff after a Prettier update stays readable.
 const lines = (cases) => cases.map((c) => `    ${JSON.stringify(c)}`).join(',\n');
-process.stdout.write(`{
+writeFileSync(new URL('prettier.json', import.meta.url), `{
   "prettier": ${JSON.stringify(version)},
   "widths": [
 ${lines(widths)}

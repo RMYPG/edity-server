@@ -20,6 +20,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -28,7 +29,7 @@ const twoSites = `{
   "sites": [
     {
       "id": "edity-sandbox",
-      "hostnames": ["sandbox.example.com"],
+      "hostnames": ["sandbox.example.com", "www.sandbox.example.com", "localhost"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
       "zitadelRole": "site:edity-sandbox",
@@ -122,7 +123,7 @@ func post(t *testing.T, h http.Handler, body string, edit func(*http.Request)) *
 
 func TestAPublishAnswersItsCommit(t *testing.T) {
 	p := &fakePublisher{published: publish.Published{
-		SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.4.3", Conflicts: []string{"hero.title"},
+		SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}, Conflicts: []string{"hero.title"},
 	}}
 	rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, nil)
 
@@ -161,7 +162,7 @@ func TestAPublishAnswersItsCommit(t *testing.T) {
 }
 
 func TestAPublishGoesOnWhenTheBrowserGoesAway(t *testing.T) {
-	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { *r = *r.WithContext(ctx) })
@@ -227,8 +228,13 @@ func TestAPublishWithoutASessionGets401(t *testing.T) {
 func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 	for _, origin := range []string{
 		"", "null", "https://evil.example.com", "https://sandbox.example.com.evil.example.com",
-		"https://sandbox.example.com:8443", "https://fisioindoor.example.com", "ftp://sandbox.example.com",
+		"https://fisioindoor.example.com", "ftp://sandbox.example.com",
 		"https://sandbox.example.com/page", "https://user@sandbox.example.com", "sandbox.example.com",
+		// Over http, as the server sees every request behind Cloudflare
+		// Tunnel, from a hostname that is not loopback.
+		"http://sandbox.example.com", "http://sandbox.example.com:80",
+		// Loopback, but none of the Site's hostnames.
+		"http://127.0.0.1:4321", "https://localhost.evil.example.com",
 	} {
 		p := &fakePublisher{}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
@@ -241,9 +247,13 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 			t.Errorf("Origin %q: status = %d, published %d times, want 403 and none", origin, rec.Code, p.calls())
 		}
 	}
-	// The same origin, whatever the case of its host or its scheme.
-	for _, origin := range []string{"https://Sandbox.Example.com", "http://sandbox.example.com"} {
-		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+	// One of the Site's hostnames over https, whatever the case of its
+	// host or its port, and localhost over http, as in development.
+	for _, origin := range []string{
+		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:8443",
+		"https://www.sandbox.example.com", "http://localhost:4321", "https://localhost",
+	} {
+		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { r.Header.Set("Origin", origin) })
 		if rec.Code != http.StatusAccepted {
 			t.Errorf("Origin %q: status = %d, want 202", origin, rec.Code)
@@ -298,7 +308,7 @@ func TestATooLargePublishGets413(t *testing.T) {
 }
 
 func TestEachSitePublishesWithinItsRateLimit(t *testing.T) {
-	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 	h := publishServer(t, cookieSessions{}, p, server.RateLimit{Burst: 2, Every: time.Hour})
 
 	// A request that is not a Publish spends nothing.
@@ -334,36 +344,36 @@ func TestViolationsAreWrittenAsTheEditorReadsThem(t *testing.T) {
 	}
 }
 
-// fakeNotifier sends each Publish it is asked to note on noted, and answers
-// err once release is closed.
-type fakeNotifier struct {
-	noted   chan publish.Published
-	release chan struct{}
-	err     error
+// fakeReporter sends each Publish it is asked to report on reported, and
+// answers err once release is closed.
+type fakeReporter struct {
+	reported chan publish.Published
+	release  chan struct{}
+	err      error
 }
 
-func (n *fakeNotifier) NoteDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error {
+func (n *fakeReporter) ReportDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error {
 	if _, ok := ctx.Deadline(); !ok || s.ID != "edity-sandbox" {
 		return errors.New("no deadline, or another Site")
 	}
-	n.noted <- p
+	n.reported <- p
 	<-n.release
 	if ctx.Err() != nil {
-		return errors.New("the note's context ended with the request's")
+		return errors.New("the report's context ended with the request's")
 	}
 	return n.err
 }
 
-func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreNoted(t *testing.T) {
+func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreReported(t *testing.T) {
 	sites, err := site.Parse(strings.NewReader(twoSites))
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
 	p := &fakePublisher{err: &publish.ConflictsError{Paths: []string{"hero.title"}}}
-	n := &fakeNotifier{noted: make(chan publish.Published, 2), release: make(chan struct{}), err: errors.New("GitHub could not be reached")}
+	n := &fakeReporter{reported: make(chan publish.Published, 2), release: make(chan struct{}), err: errors.New("GitHub could not be reached")}
 	h := apitest.Handler(t, server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)), server.Services{
-		Sessions: cookieSessions{}, Publisher: p, Notifier: n,
+		Sessions: cookieSessions{}, Publisher: p, Reporter: n,
 	}))
 
 	// A Publish that commits nothing ships nothing.
@@ -371,10 +381,10 @@ func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreNoted(t *testing.T
 		t.Fatalf("status = %d, want 409", rec.Code)
 	}
 
-	// A note that has not ended, and then fails, does not hold up or fail
+	// A report that has not ended, and then fails, does not hold up or fail
 	// the Publish, even once the browser has gone away.
 	p.mu.Lock()
-	p.err, p.published = nil, publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}
+	p.err, p.published = nil, publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}
 	p.mu.Unlock()
 	ctx, cancel := context.WithCancel(t.Context())
 	rec := post(t, h, draft, func(r *http.Request) { *r = *r.WithContext(ctx) })
@@ -383,20 +393,20 @@ func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreNoted(t *testing.T
 		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body)
 	}
 	select {
-	case noted := <-n.noted:
-		if noted.SHA != p.published.SHA || noted.Version != p.published.Version {
-			t.Errorf("noted %+v, want the Publish %+v", noted, p.published)
+	case reported := <-n.reported:
+		if reported.SHA != p.published.SHA || reported.Version != p.published.Version {
+			t.Errorf("reported %+v, want the Publish %+v", reported, p.published)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the Publish's commits were not noted")
+		t.Fatal("the Publish's commits were not reported")
 	}
 	close(n.release)
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(logs.String(), "Developer commits not noted") && time.Now().Before(deadline) {
+	for !strings.Contains(logs.String(), "Developer commits not reported") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !strings.Contains(logs.String(), `"error":"GitHub could not be reached"`) {
-		t.Errorf("the failed note was not logged with its error: %s", logs.String())
+		t.Errorf("the failed report was not logged with its error: %s", logs.String())
 	}
 }
 

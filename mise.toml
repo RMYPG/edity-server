@@ -8,6 +8,11 @@ jactionlint = "2.3.0"
 shellcheck = "0.11.0"
 # Same version as platform's mise.toml.
 infisical = "0.43.132"
+# The testdata/record.sh scripts read GitHub with it.
+gh = "2.102.0"
+# Runs the generators that read Prettier and @edity/core from an edity
+# checkout. The same version as edity's mise.toml.
+node = "24.22.1"
 
 [tasks.lint]
 description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
@@ -42,3 +47,28 @@ run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run Test
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
 env = { EDITY_SITES_FILE = "sites.dev.json" }
 run = "infisical run --env=dev --path=/github -- go run ./cmd/edity-server"
+
+[tasks."record:progress"]
+description = "Record the GitHub answers internal/progress's tests replay, from RMYPG/edity-sandbox, reading only, as whoever gh is logged in as"
+dir = "{{config_root}}/internal/progress/testdata"
+run = "bash record.sh"
+
+[tasks."record:issues"]
+description = "Record the GitHub answers internal/issues's tests replay, from RMYPG/edity-sandbox, reading only, as whoever gh is logged in as"
+dir = "{{config_root}}/internal/issues/testdata"
+run = "bash record.sh"
+
+[tasks."generate:emoji"]
+description = "Write internal/content/emoji.go, the width tables of Prettier's line fitting, from the Prettier of an edity checkout"
+usage = 'arg "<edity>" help="The path of an edity checkout with its npm dependencies installed (mise run deps there)"'
+run = 'node internal/content/emoji.mjs "$usage_edity"'
+
+[tasks."record:prettier"]
+description = "Record in internal/content/testdata/prettier.json what the Prettier of an edity checkout makes of the content tests' cases"
+usage = 'arg "<edity>" help="The path of an edity checkout with its npm dependencies installed (mise run deps there)"'
+run = 'node internal/content/testdata/prettier.mjs "$usage_edity"'
+
+[tasks."record:core-violations"]
+description = "Record in internal/fields/testdata/core-violations.json what @edity/core finds in the contracts' page fixtures, from an edity checkout"
+usage = 'arg "<edity>" help="The path of an edity checkout at the contracts tag go.mod pins, built with mise run build there"'
+run = 'node internal/fields/testdata/core-violations.mjs "$usage_edity"'
