@@ -239,10 +239,10 @@ paths:
         Site repository then cuts as a Release (V3).
 
         The Release ships everything on `main`. Once it has answered, the
-        server notes on an issue of the Site repository the commits since the
-        last Release that the edity-publisher GitHub App did not make and that
-        change more than content (V7). Noting them never delays or fails the
-        Publish.
+        server reports on an issue of the Site repository the commits since
+        the last Release that the edity-publisher GitHub App did not make and
+        that change more than content (V7). Reporting them never delays or
+        fails the Publish.
       requestBody:
         description: The Draft's Changes on the page.
         required: true
