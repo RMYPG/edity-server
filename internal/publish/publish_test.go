@@ -14,6 +14,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -192,7 +193,7 @@ func TestAPublishCommitsTheChangesAndAPatchBumpOnHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if published.SHA != repo.head || published.Version != "1.0.1" || published.Conflicts != nil {
+	if published.SHA != repo.head || published.Version != (release.Version{1, 0, 1}) || published.Conflicts != nil {
 		t.Errorf("Publish = %+v, want main HEAD %s at 1.0.1, no conflicts", published, repo.head)
 	}
 	commit := repo.commits[repo.head]
@@ -436,7 +437,7 @@ func TestACommitGitHubMadeWithoutTellingIsFoundAndNotMadeAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.made != 1 || published.SHA != repo.head || published.Version != "1.0.1" {
+	if repo.made != 1 || published.SHA != repo.head || published.Version != (release.Version{1, 0, 1}) {
 		t.Errorf("Publish = %+v, made %d, want the one commit at HEAD %s", published, repo.made, repo.head)
 	}
 }
@@ -531,7 +532,7 @@ func TestBumpPatchChangesTheVersionAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := strings.Replace(pkg, `"1.4.9"`, `"1.4.10"`, 1); version != "1.4.10" || string(bumped) != want {
+	if want := strings.Replace(pkg, `"1.4.9"`, `"1.4.10"`, 1); version != (release.Version{1, 4, 10}) || string(bumped) != want {
 		t.Errorf("bumpPatch = %s,\n%s\nwant 1.4.10,\n%s", version, bumped, want)
 	}
 	for _, broken := range []string{

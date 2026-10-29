@@ -21,6 +21,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -127,12 +128,12 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.LogAttrs(r.Context(), slog.LevelInfo, "published",
 		slog.String("site", s.ID), slog.String("page", draft.Page),
-		slog.String("sha", published.SHA), slog.String("version", published.Version),
+		slog.String("sha", published.SHA), slog.String("version", published.Version.String()),
 		slog.Int("conflicts", len(published.Conflicts)))
 	answer := struct {
-		SHA       string     `json:"sha"`
-		Version   string     `json:"version"`
-		Conflicts []conflict `json:"conflicts,omitempty"`
+		SHA       string          `json:"sha"`
+		Version   release.Version `json:"version"`
+		Conflicts []conflict      `json:"conflicts,omitempty"`
 	}{published.SHA, published.Version, conflicts(published.Conflicts)}
 	writeJSON(w, http.StatusAccepted, answer)
 	if h.notifier != nil {

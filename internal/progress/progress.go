@@ -27,13 +27,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -53,7 +52,7 @@ type Progress struct {
 	Stage Stage
 	// Version is the version of the Release the commit becomes: the one in
 	// its package.json.
-	Version string
+	Version release.Version
 	// Run is the address of the run that made the Publish fail, when one
 	// did, and Reason says what failed, for the Developer.
 	Run    string
@@ -68,7 +67,8 @@ var ErrNotPublish = errors.New("not the commit of a Publish")
 type Failure struct {
 	// SHA is the Publish's commit, Message its commit message, and Version
 	// the version of the Release it was to become.
-	SHA, Message, Version string
+	SHA, Message string
+	Version      release.Version
 	// Run is the address of the run that failed, when one did, and Reason
 	// says what failed.
 	Run, Reason string
@@ -119,9 +119,6 @@ const (
 // releases.
 const releaseRuns = "actions/workflows/release-on-publish.yml/runs?event=workflow_run&per_page=20"
 
-// shaPattern is a commit's full sha, as Publish answers it.
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-
 // A Tracker works out the progress of Publishes. It is safe for concurrent
 // use.
 type Tracker struct {
@@ -159,7 +156,7 @@ func New(repository func(site.Repository) Repository, bot func(context.Context) 
 // look at GitHub.
 func (t *Tracker) Progress(ctx context.Context, s site.Site, sha string) (Progress, error) {
 	// It goes into the calls' paths and queries as it is.
-	if !shaPattern.MatchString(sha) {
+	if !github.IsSHA(sha) {
 		return Progress{}, fmt.Errorf("%q is not a sha: %w", sha, ErrNotPublish)
 	}
 	k := key{s.ID, sha}
@@ -237,7 +234,7 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 	if !ok {
 		return Progress{}, nil, fmt.Errorf("%s's package.json has no X.Y.Z version: %w", sha, ErrNotPublish)
 	}
-	p := Progress{Version: v.String()}
+	p := Progress{Version: v}
 	failed := func(run, reason, id string) (Progress, *Failure, error) {
 		p.Stage, p.Run, p.Reason = Failed, run, reason
 		return p, &Failure{SHA: sha, Message: commit.Message, Version: p.Version, Run: run, Reason: reason, ID: id}, nil
@@ -270,14 +267,14 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 		return p, nil, nil
 	}
 
-	var release runs
-	if err := repo.Get(ctx, releaseRuns, &release); err != nil && !errors.Is(err, github.ErrNotFound) {
+	var releases runs
+	if err := repo.Get(ctx, releaseRuns, &releases); err != nil && !errors.Is(err, github.ErrNotFound) {
 		return Progress{}, nil, err
 	}
 	// The newest run for the commit since its CI last started: an older one
 	// is from a CI run that has been run again since.
 	title := "Release " + sha
-	for _, r := range release.Runs {
+	for _, r := range releases.Runs {
 		if r.DisplayTitle != title || r.CreatedAt.Before(ci.lastStarted()) {
 			continue
 		}
@@ -304,12 +301,12 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 // whose version is v. Tags go on main's commits with rising versions, so a
 // Release older than v can't contain it, and the highest tells for every
 // other.
-func releasedIn(ctx context.Context, repo Repository, sha string, v version) (bool, error) {
+func releasedIn(ctx context.Context, repo Repository, sha string, v release.Version) (bool, error) {
 	highest, tagged, err := highestRelease(ctx, repo)
 	if err != nil {
 		return false, err
 	}
-	if !tagged || highest.less(v) {
+	if !tagged || highest.Less(v) {
 		return false, nil
 	}
 	var compared struct {
@@ -335,22 +332,22 @@ func LastRelease(ctx context.Context, repo Repository) (string, error) {
 
 // highestRelease returns the version of the highest vX.Y.Z tag, and false
 // when there is none.
-func highestRelease(ctx context.Context, repo Repository) (version, bool, error) {
+func highestRelease(ctx context.Context, repo Repository) (release.Version, bool, error) {
 	var refs []struct {
 		Ref string `json:"ref"`
 	}
 	err := repo.Get(ctx, "git/matching-refs/tags/v", &refs)
 	if errors.Is(err, github.ErrNotFound) {
-		return version{}, false, nil
+		return release.Version{}, false, nil
 	}
 	if err != nil {
-		return version{}, false, err
+		return release.Version{}, false, err
 	}
-	var highest version
+	var highest release.Version
 	tagged := false
 	for _, ref := range refs {
 		tag, ok := strings.CutPrefix(ref.Ref, "refs/tags/v")
-		if w, isVersion := parseVersion(tag); ok && isVersion && (!tagged || highest.less(w)) {
+		if w, isVersion := release.ParseVersion(tag); ok && isVersion && (!tagged || highest.Less(w)) {
 			highest, tagged = w, true
 		}
 	}
@@ -437,47 +434,13 @@ func (rs runs) lastUpdated() time.Time {
 	return last
 }
 
-// A version is a Release's version, X.Y.Z.
-type version [3]uint64
-
-var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-
-func parseVersion(s string) (version, bool) {
-	parts := versionPattern.FindStringSubmatch(s)
-	if parts == nil {
-		return version{}, false
-	}
-	var v version
-	for i := range v {
-		n, err := strconv.ParseUint(parts[i+1], 10, 64)
-		if err != nil {
-			return version{}, false
-		}
-		v[i] = n
-	}
-	return v, true
-}
-
 // versionOf reads the version of a package.json.
-func versionOf(pkg []byte) (version, bool) {
+func versionOf(pkg []byte) (release.Version, bool) {
 	var p struct {
 		Version string `json:"version"`
 	}
 	if json.Unmarshal(pkg, &p) != nil {
-		return version{}, false
+		return release.Version{}, false
 	}
-	return parseVersion(p.Version)
-}
-
-func (v version) less(w version) bool {
-	for i := range v {
-		if v[i] != w[i] {
-			return v[i] < w[i]
-		}
-	}
-	return false
-}
-
-func (v version) String() string {
-	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
+	return release.ParseVersion(p.Version)
 }

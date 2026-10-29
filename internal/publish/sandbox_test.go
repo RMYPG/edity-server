@@ -183,7 +183,7 @@ func publishAndRelease(t *testing.T, repo *github.Repo, p *publish.Publisher, s 
 func waitForRelease(ctx context.Context, t *testing.T, repo *github.Repo, published publish.Published) error {
 	ctx, cancel := context.WithTimeout(ctx, releaseTimeout)
 	defer cancel()
-	tag := "v" + published.Version
+	tag := "v" + published.Version.String()
 	ciPassed := false
 	for {
 		if !ciPassed {

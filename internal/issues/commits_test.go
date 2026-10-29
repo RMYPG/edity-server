@@ -8,10 +8,11 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 )
 
 // firstPublish is the sandbox's first Publish of 2026-10-29.
-var firstPublish = publish.Published{SHA: first, Version: "1.0.1"}
+var firstPublish = publish.Published{SHA: first, Version: release.Version{1, 0, 1}}
 
 // shipsDeveloperCommits makes the last Release before the first Publish
 // v1.0.0 as if it had been cut before the Developer's last two commits, so
@@ -47,7 +48,7 @@ func TestAPublishThatShipsDeveloperCommitsNotesThemOnce(t *testing.T) {
 
 	// Until the next Release, every Publish ships them, and none notes them
 	// again, nor reads them again.
-	second := publish.Published{SHA: second, Version: "1.0.2"}
+	second := publish.Published{SHA: second, Version: release.Version{1, 0, 2}}
 	shipsDeveloperCommits(t, f, second.SHA)
 	r := f.reporter(t)
 	for range 2 {

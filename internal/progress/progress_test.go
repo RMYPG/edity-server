@@ -17,6 +17,7 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/githubtest"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -336,7 +337,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(map[string]any) bool { return false })
 			},
-			want: Progress{Stage: Validating, Version: "1.0.1"},
+			want: Progress{Stage: Validating, Version: release.Version{1, 0, 1}},
 		},
 		"validating: CI running": {
 			sha: first, now: at("18:51:00"),
@@ -344,7 +345,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { inProgress(run, "2026-10-29T18:51:00Z"); return true })
 			},
-			want: Progress{Stage: Validating, Version: "1.0.1"},
+			want: Progress{Stage: Validating, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: its Release on Publish run under way": {
 			sha: first, now: at("18:52:30"),
@@ -355,7 +356,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					inProgress(run, "2026-10-29T18:52:30Z")
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.1"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: a Release on Publish run that does not name its commit": {
 			sha: first, now: at("18:52:30"),
@@ -363,7 +364,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) { inProgress(run, "2026-10-29T18:52:30Z") })
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.1"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: its Release on Publish run cancelled, as one a newer run takes the place of": {
 			sha: first, now: at("18:53:00"),
@@ -373,7 +374,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					run["display_title"], run["conclusion"] = "Release "+first, "cancelled"
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.1"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: CI ran again since its Release on Publish run failed": {
 			sha: first, now: at("18:55:05"),
@@ -387,7 +388,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					run["display_title"], run["conclusion"] = "Release "+first, "failure"
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.1"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: another Publish's Release failed on main while this commit was its HEAD": {
 			sha: second, now: at("18:55:20"),
@@ -406,7 +407,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					return true
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.2"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 2}},
 		},
 		"releasing: another Publish's untitled Release failed on this commit": {
 			sha: second, now: at("18:55:20"),
@@ -423,27 +424,27 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					return true
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.2"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 2}},
 		},
 		"released: its own Release": {
 			sha: first, now: at("18:53:00"),
 			edit: func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.1") },
-			want: Progress{Stage: Released, Version: "1.0.1"},
+			want: Progress{Stage: Released, Version: release.Version{1, 0, 1}},
 		},
 		"released: in a newer Release": {
 			sha: first, now: at("19:05:00"),
-			want: Progress{Stage: Released, Version: "1.0.1"},
+			want: Progress{Stage: Released, Version: release.Version{1, 0, 1}},
 		},
 		"released: the second": {
 			sha: second, now: at("19:05:00"),
-			want: Progress{Stage: Released, Version: "1.0.2"},
+			want: Progress{Stage: Released, Version: release.Version{1, 0, 2}},
 		},
 		"released: overtaken by a newer Release although its CI failed (P8)": {
 			sha: first, now: at("19:05:00"),
 			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
 			},
-			want: Progress{Stage: Released, Version: "1.0.1"},
+			want: Progress{Stage: Released, Version: release.Version{1, 0, 1}},
 		},
 		"failed: CI": {
 			sha: first, now: at("18:52:20"),
@@ -451,7 +452,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
 			},
-			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
 			failure: "run:40934506192/1",
 		},
 		"failed: CI, run again and failed again": {
@@ -463,7 +464,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					return true
 				})
 			},
-			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
 			failure: "run:40934506192/2",
 		},
 		"failed: its Release on Publish run": {
@@ -474,7 +475,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					run["display_title"], run["conclusion"] = "Release "+first, "failure"
 				})
 			},
-			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934846962", Reason: "Release on Publish ended failure"},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934846962", Reason: "Release on Publish ended failure"},
 			failure: "run:40934846962/1",
 		},
 		"failed: no CI run ten minutes after the commit": {
@@ -483,13 +484,13 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(map[string]any) bool { return false })
 			},
-			want:    Progress{Stage: Failed, Version: "1.0.1", Reason: "no CI run 10 minutes after the commit"},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "no CI run 10 minutes after the commit"},
 			failure: "no-ci:" + first,
 		},
 		"failed: no Release half an hour after CI passed": {
 			sha: first, now: at("19:22:14"),
 			edit:    func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.0") },
-			want:    Progress{Stage: Failed, Version: "1.0.1", Reason: "no Release 30 minutes after CI passed"},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "no Release 30 minutes after CI passed"},
 			failure: "no-release:" + first + "@2026-10-29T18:50:04Z",
 		},
 		"releasing: half an hour after CI passed, its Release on Publish run waiting its turn": {
@@ -502,7 +503,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					run["status"] = "queued"
 				})
 			},
-			want: Progress{Stage: Releasing, Version: "1.0.1"},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -351,6 +352,16 @@ func (r *Repo) File(ctx context.Context, path, ref string) ([]byte, error) {
 		return nil, err
 	}
 	return a.body, nil
+}
+
+// shaPattern is a commit's full sha in lowercase hex, as the OpenAPI file's
+// pattern has it.
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// IsSHA tells whether s is a commit's full sha, as Publish answers it. Such
+// a sha goes into a call's path or query as it is.
+func IsSHA(s string) bool {
+	return shaPattern.MatchString(s)
 }
 
 // A GitCommit is a commit as Git has it.

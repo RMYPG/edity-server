@@ -20,6 +20,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -122,7 +123,7 @@ func post(t *testing.T, h http.Handler, body string, edit func(*http.Request)) *
 
 func TestAPublishAnswersItsCommit(t *testing.T) {
 	p := &fakePublisher{published: publish.Published{
-		SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.4.3", Conflicts: []string{"hero.title"},
+		SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}, Conflicts: []string{"hero.title"},
 	}}
 	rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, nil)
 
@@ -161,7 +162,7 @@ func TestAPublishAnswersItsCommit(t *testing.T) {
 }
 
 func TestAPublishGoesOnWhenTheBrowserGoesAway(t *testing.T) {
-	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { *r = *r.WithContext(ctx) })
@@ -243,7 +244,7 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 	}
 	// The same origin, whatever the case of its host or its scheme.
 	for _, origin := range []string{"https://Sandbox.Example.com", "http://sandbox.example.com"} {
-		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { r.Header.Set("Origin", origin) })
 		if rec.Code != http.StatusAccepted {
 			t.Errorf("Origin %q: status = %d, want 202", origin, rec.Code)
@@ -298,7 +299,7 @@ func TestATooLargePublishGets413(t *testing.T) {
 }
 
 func TestEachSitePublishesWithinItsRateLimit(t *testing.T) {
-	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 	h := publishServer(t, cookieSessions{}, p, server.RateLimit{Burst: 2, Every: time.Hour})
 
 	// A request that is not a Publish spends nothing.
@@ -374,7 +375,7 @@ func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreNoted(t *testing.T
 	// A note that has not ended, and then fails, does not hold up or fail
 	// the Publish, even once the browser has gone away.
 	p.mu.Lock()
-	p.err, p.published = nil, publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}
+	p.err, p.published = nil, publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}
 	p.mu.Unlock()
 	ctx, cancel := context.WithCancel(t.Context())
 	rec := post(t, h, draft, func(r *http.Request) { *r = *r.WithContext(ctx) })

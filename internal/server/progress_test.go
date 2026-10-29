@@ -16,6 +16,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/apitest"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -75,7 +76,7 @@ func get(t *testing.T, h http.Handler, sha string, edit func(*http.Request)) *ht
 
 func TestAPublishsProgressIsItsStageAndVersion(t *testing.T) {
 	for _, stage := range []progress.Stage{progress.Validating, progress.Releasing, progress.Released, progress.Failed} {
-		tracker := &fakeTracker{progress: progress.Progress{Stage: stage, Version: "1.0.1", Run: "https://github.com/x", Reason: "CI ended failure"}}
+		tracker := &fakeTracker{progress: progress.Progress{Stage: stage, Version: release.Version{1, 0, 1}, Run: "https://github.com/x", Reason: "CI ended failure"}}
 		rec := get(t, progressServer(t, cookieSessions{}, tracker), commit, nil)
 		if want := fmt.Sprintf(`{"stage":%q,"version":"1.0.1"}`, stage); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != want {
 			t.Errorf("%s: status = %d, body = %s, want 200 %s", stage, rec.Code, rec.Body, want)
@@ -86,7 +87,7 @@ func TestAPublishsProgressIsItsStageAndVersion(t *testing.T) {
 	}
 
 	// Each Site's Publishes are its own repository's.
-	tracker := &fakeTracker{progress: progress.Progress{Stage: progress.Validating, Version: "2.3.4"}}
+	tracker := &fakeTracker{progress: progress.Progress{Stage: progress.Validating, Version: release.Version{2, 3, 4}}}
 	get(t, progressServer(t, cookieSessions{}, tracker), commit, func(r *http.Request) { r.Host = "fisioindoor.example.com" })
 	if len(tracker.asked) != 1 || tracker.asked[0] != "fisioindoor "+commit {
 		t.Errorf("asked %v, want fisioindoor's %s", tracker.asked, commit)
@@ -124,7 +125,7 @@ func TestTheProgressWithoutASessionGets401(t *testing.T) {
 }
 
 func TestTheProgressAskedFromAnotherOriginGets403(t *testing.T) {
-	tracker := &fakeTracker{progress: progress.Progress{Stage: progress.Validating, Version: "1.0.1"}}
+	tracker := &fakeTracker{progress: progress.Progress{Stage: progress.Validating, Version: release.Version{1, 0, 1}}}
 	h := progressServer(t, cookieSessions{}, tracker)
 	for _, origin := range []string{"null", "https://evil.example.com", "https://fisioindoor.example.com", "https://sandbox.example.com:8443"} {
 		if rec := get(t, h, commit, func(r *http.Request) { r.Header.Set("Origin", origin) }); rec.Code != http.StatusForbidden {

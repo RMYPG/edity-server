@@ -22,6 +22,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/progress"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -44,23 +45,23 @@ var sandbox = site.Site{ID: "edity-sandbox", Repository: site.Repository{Owner: 
 // The failures progress tells of the two Publishes, had their runs failed.
 var (
 	ciFailed = progress.Failure{
-		SHA: first, Message: publishMessage, Version: "1.0.1",
+		SHA: first, Message: publishMessage, Version: release.Version{1, 0, 1},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure",
 		ID: "run:40934506192/1",
 	}
 	// ciFailedAgain is CI run again on the first Publish, and failing again.
 	ciFailedAgain = progress.Failure{
-		SHA: first, Message: publishMessage, Version: "1.0.1",
+		SHA: first, Message: publishMessage, Version: release.Version{1, 0, 1},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure",
 		ID: "run:40934506192/2",
 	}
 	releaseFailed = progress.Failure{
-		SHA: second, Message: publishMessage, Version: "1.0.2",
+		SHA: second, Message: publishMessage, Version: release.Version{1, 0, 2},
 		Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40935264906", Reason: "Release on Publish ended failure",
 		ID: "run:40935264906/1",
 	}
 	noCI = progress.Failure{
-		SHA: second, Message: publishMessage, Version: "1.0.2",
+		SHA: second, Message: publishMessage, Version: release.Version{1, 0, 2},
 		Reason: "no CI run 10 minutes after the commit",
 		ID:     "no-ci:" + second,
 	}
@@ -480,13 +481,13 @@ func TestAFailureSaysWhatFailedForWhichPublish(t *testing.T) {
 			"Edity end-to-end check published `home` in f50d2c45e28706d25da874225f0f64770cd1ac12, which changed:\n\n" +
 			"- `hero.cta`"},
 		{progress.Failure{
-			SHA: first, Version: "1.0.1", Reason: "CI ended failure", ID: "run:1/1",
+			SHA: first, Version: release.Version{1, 0, 1}, Reason: "CI ended failure", ID: "run:1/1",
 			Message: "content: publish home\n\nChanged:\n- hero.title\n- plans.1.price\n\nEdity-Client: @MarioRP-01 *Ana* <b>",
 		}, "### v1.0.1 was not released\n\n" +
 			"CI ended failure.\n\n" +
 			"\\@MarioRP-01 \\*Ana\\* \\<b\\> published `home` in 4bc931076ac8583bd8905a4c508c987877afc09d, which changed:\n\n" +
 			"- `hero.title`\n- `plans.1.price`"},
-		{progress.Failure{SHA: first, Version: "1.0.1", Reason: "CI ended failure", ID: "run:1/1", Message: "Not a Publish's"},
+		{progress.Failure{SHA: first, Version: release.Version{1, 0, 1}, Reason: "CI ended failure", ID: "run:1/1", Message: "Not a Publish's"},
 			"### v1.0.1 was not released\n\nCI ended failure.\n\nThe Publish is 4bc931076ac8583bd8905a4c508c987877afc09d."},
 	} {
 		if got := failureText(c.failure); got != c.want {

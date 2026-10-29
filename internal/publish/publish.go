@@ -21,6 +21,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/RMYPG/edity-server/internal/fields"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -134,7 +135,7 @@ func (d Draft) Check() error {
 type Published struct {
 	SHA string
 	// Version is the version of the Release the commit becomes.
-	Version string
+	Version release.Version
 	// Conflicts are the paths of the Changes that did not merge.
 	Conflicts []string
 }
@@ -250,7 +251,7 @@ func landed(ctx context.Context, repo Repository, head string, pl *plan) (Publis
 // A plan is the commit a Publish makes on one HEAD.
 type plan struct {
 	commit    github.NewCommit
-	version   string
+	version   release.Version
 	conflicts []string
 }
 

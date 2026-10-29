@@ -5,10 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"time"
 
+	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -22,9 +23,6 @@ type Tracker interface {
 // progressTimeout bounds how long a request waits for GitHub to tell a
 // Publish's progress.
 const progressTimeout = 25 * time.Second
-
-// shaPattern is the OpenAPI file's pattern for a commit's sha.
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type progressHandler struct {
 	sessions Sessions
@@ -46,7 +44,7 @@ func (h *progressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	commit := r.PathValue("sha")
-	if !shaPattern.MatchString(commit) {
+	if !github.IsSHA(commit) {
 		http.Error(w, "No Publish of the Site has that commit.", http.StatusNotFound)
 		return
 	}
@@ -65,8 +63,8 @@ func (h *progressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The progress moves on, so no cache may keep it.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, struct {
-		Stage   progress.Stage `json:"stage"`
-		Version string         `json:"version"`
+		Stage   progress.Stage  `json:"stage"`
+		Version release.Version `json:"version"`
 	}{p.Stage, p.Version})
 }
 
