@@ -29,14 +29,14 @@ func write(b *strings.Builder, v *Value, indent string, room int) {
 		for i, key := range v.keys {
 			head := inner + quote(key) + ": "
 			b.WriteString(head)
-			write(b, v.elems[i], inner, rest(head, i < len(v.keys)-1))
+			write(b, v.values[i], inner, rest(head, i < len(v.keys)-1))
 			if i < len(v.keys)-1 {
 				b.WriteByte(',')
 			}
 			b.WriteByte('\n')
 		}
 		b.WriteString(indent + "}")
-	case v.kind == '[' && len(v.elems) > 0:
+	case v.kind == '[' && len(v.values) > 0:
 		if !mustBreak(v) {
 			if line := flat(v); width(line) <= room {
 				b.WriteString(line)
@@ -48,11 +48,11 @@ func write(b *strings.Builder, v *Value, indent string, room int) {
 		if allNumbers(v) {
 			fill(b, v, inner)
 		} else {
-			for i, elem := range v.elems {
+			for i, item := range v.values {
 				if i > 0 {
 					b.WriteString(",\n" + inner)
 				}
-				write(b, elem, inner, rest(inner, i < len(v.elems)-1))
+				write(b, item, inner, rest(inner, i < len(v.values)-1))
 			}
 		}
 		b.WriteString("\n" + indent + "]")
@@ -76,9 +76,9 @@ func flat(v *Value) string {
 	case '{':
 		return "{}"
 	case '[':
-		items := make([]string, len(v.elems))
-		for i, elem := range v.elems {
-			items[i] = flat(elem)
+		items := make([]string, len(v.values))
+		for i, item := range v.values {
+			items[i] = flat(item)
 		}
 		return "[" + strings.Join(items, ", ") + "]"
 	default:
@@ -91,22 +91,22 @@ func flat(v *Value) string {
 // that must break, or when Prettier breaks it on sight, as a List of two or
 // more Lists of two or more Items, or of objects of two or more keys.
 func mustBreak(v *Value) bool {
-	matrix := len(v.elems) > 1
-	for _, elem := range v.elems {
+	matrix := len(v.values) > 1
+	for _, item := range v.values {
 		switch {
-		case elem.kind == '{' && len(elem.keys) > 0:
+		case item.kind == '{' && len(item.keys) > 0:
 			return true
-		case elem.kind == '[' && mustBreak(elem):
+		case item.kind == '[' && mustBreak(item):
 			return true
 		}
-		matrix = matrix && elem.kind == v.elems[0].kind && (elem.kind == '[' || elem.kind == '{') && len(elem.elems) > 1
+		matrix = matrix && item.kind == v.values[0].kind && (item.kind == '[' || item.kind == '{') && len(item.values) > 1
 	}
 	return matrix
 }
 
 func allNumbers(v *Value) bool {
-	for _, elem := range v.elems {
-		if elem.kind != '0' {
+	for _, item := range v.values {
+		if item.kind != '0' {
 			return false
 		}
 	}
@@ -119,16 +119,16 @@ func allNumbers(v *Value) bool {
 // before it was written.
 func fill(b *strings.Builder, v *Value, inner string) {
 	item := func(i int) string {
-		if i < len(v.elems)-1 {
-			return v.elems[i].text + ","
+		if i < len(v.values)-1 {
+			return v.values[i].text + ","
 		}
-		return v.elems[i].text
+		return v.values[i].text
 	}
 	column := width(inner)
-	for i := range v.elems {
+	for i := range v.values {
 		text := item(i)
 		b.WriteString(text)
-		if i == len(v.elems)-1 {
+		if i == len(v.values)-1 {
 			break
 		}
 		if width(text)+1+width(item(i+1)) <= printWidth-column {

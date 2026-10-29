@@ -1,7 +1,7 @@
 // Package apitest checks the server's requests and responses against its
 // OpenAPI description, api/openapi.yaml, so that each handler's tests also
-// test the contract the Editor's client is generated from. Only tests import
-// it.
+// test the contract the Editor's API client is generated from. Only tests
+// import it.
 package apitest
 
 import (

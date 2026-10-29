@@ -186,7 +186,7 @@ func TestParseChangeTakesOnlyContentValues(t *testing.T) {
 		}
 		got := v.text
 		if v.kind == '[' {
-			got = "[" + v.elems[0].text + ", { \"b\": " + v.elems[1].elems[0].text + " }]"
+			got = "[" + v.values[0].text + ", { \"b\": " + v.values[1].values[0].text + " }]"
 		}
 		if got != want {
 			t.Errorf("ParseChange(%s) = %s, want %s", value, got, want)

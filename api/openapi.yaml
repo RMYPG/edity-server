@@ -4,7 +4,7 @@
 #
 # Unlike the rest of edity-server, which is AGPL-3.0, this file is
 # MPL-2.0, as the edity packages are: edity vendors it, and @edity/astro
-# ships the Editor's client generated from it. See README.md, "License".
+# ships the Editor's API client generated from it. See README.md, "License".
 
 openapi: 3.1.1
 
@@ -14,8 +14,8 @@ info:
   summary: The HTTP API the Editor calls on each Site's own origin.
   description: |
     The API of edity-server, the one server behind every Site's
-    `/_edity/login` and `/_edity/api/*` routes (ADR-0001). The Editor's client
-    is generated from this file, and the server's tests check its handlers
+    `/_edity/login` and `/_edity/api/*` routes (ADR-0001). The Editor's API
+    client is generated from this file, and the server's tests check its handlers
     against it (N10). Terms such as Site, Field, List, Draft, Change, Publish,
     Release, Conflict and Limit are those of Edity's glossary, `CONTEXT.md` in
     the edity repository, and IDs such as A4 are the spec's requirements.
@@ -103,7 +103,7 @@ paths:
       tags: [Login]
       summary: Finish logging in
       description: |
-        Where Zitadel sends the browser back after a login. When the user has
+        Where Zitadel sends the browser back after a login. When the Client has
         the Site's role (`zitadelRole` in the Sites file), it sets the session
         cookie and the `edity=1` marker and goes back to the path the login
         was asked to `return` to (A1). The browser navigates here; the Editor
@@ -122,7 +122,7 @@ paths:
             type: string
         - name: error
           in: query
-          description: Zitadel's OAuth 2.0 error code, when the login failed or the user cancelled it.
+          description: Zitadel's OAuth 2.0 error code, when the login failed or the Client cancelled it.
           schema:
             type: string
         - name: error_description
@@ -157,7 +157,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: The user logged in, but does not have the Site's role. No session (A1).
+          description: The person who logged in does not have the Site's role, so is not one of its Clients. No session (A1).
           content:
             text/plain:
               schema:
@@ -623,7 +623,7 @@ components:
       additionalProperties: false
       properties:
         violations:
-          description: Every Limit the Changes break.
+          description: Everything the Changes break of the page's Field definitions.
           type: array
           minItems: 1
           items:
@@ -631,22 +631,24 @@ components:
 
     Violation:
       description: |
-        A rule of the page's Field definitions that a Change breaks, as the
-        Editor's `Violation` names it, so the Editor shows the server's
-        verdicts as it shows its own.
+        What a Change breaks of the page's Field definitions, named as
+        `@edity/core`'s `Violation` names it in its `rule`, so the Editor
+        shows the server's verdicts as it shows its own.
       type: object
       required: [path, limit]
       additionalProperties: false
       properties:
         path:
           description: |
-            The content path of the value that breaks the rule: the Change's,
+            The content path of the value that breaks it: the Change's,
             or one inside it, such as `plans.1.features` inside a Change to
             `plans`.
           $ref: '#/components/schemas/ContentPath'
         limit:
           description: |
-            The rule it breaks:
+            What the value breaks: one of the Limits of its Field or List,
+            or, for `type`, `unknown` and `oneLine`, what the Field
+            definitions hold whatever their Limits.
 
             - `type`: not what the Field definitions hold there: text, a
               number, a List's Items or an Item's Fields.

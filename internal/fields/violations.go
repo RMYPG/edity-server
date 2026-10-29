@@ -10,21 +10,23 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
-// A Violation is a rule of a page's Field definitions that its content
-// breaks, at Path: keys and Item indices, dot-separated, as in a Change's
-// path, or "" for the page itself. It is one entry of the violations in a
-// 422 answer to a Publish.
+// A Violation is what a page's content breaks of its Field definitions, at
+// Path: keys and Item indices, dot-separated, as in a Change's path, or ""
+// for the page itself. It is one entry of the violations in a 422 answer to
+// a Publish.
 type Violation struct {
 	Path  string `json:"path"`
 	Limit Limit  `json:"limit"`
 }
 
-// A Limit names what a Violation breaks, with the rule names of @edity/core's
-// Violation, so the Editor handles the server's verdicts as its own.
+// A Limit names what a Violation breaks, with the names @edity/core's
+// Violation gives in its rule, so the Editor handles the server's verdicts
+// as its own: one of the Limits of a Field or a List, or Type, Unknown or
+// OneLine for what the Field definitions hold whatever their Limits, a value
+// of the right type, only the keys they have, and text on one line.
 type Limit string
 
-// The Limits a Violation can name, in the order Violations lists them at one
-// path.
+// What a Violation can name, in the order Violations lists them at one path.
 const (
 	// Type is a value that is not what the Field definitions hold there at
 	// all: text, a number, a List's Items or an object's Fields. A missing
@@ -49,7 +51,7 @@ const (
 
 var limitOrder = []Limit{Type, Unknown, OneLine, MaxChars, Min, Max, Decimals, MinItems, MaxItems}
 
-// Violations lists every rule of the Field definitions that content breaks,
+// Violations lists everything content breaks of the Field definitions,
 // ordered by path, or none when the Site's build accepts it. Line Limits are
 // never checked: only a browser can measure lines.
 //
@@ -68,8 +70,8 @@ func (d *Definitions) Violations(content any) []Violation {
 	}
 	found := violationsOf(verr, nil)
 	slices.SortFunc(found, compareViolations)
-	// A value that is not what the Field definitions hold breaks no other
-	// rule at its path, as core counts it, and a Type sorts first: a number
+	// A value that is not what the Field definitions hold breaks nothing
+	// else at its path, as core counts it, and a Type sorts first: a number
 	// too large for a double is not also over its max.
 	kept := found[:0]
 	for _, v := range found {

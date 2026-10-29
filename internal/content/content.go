@@ -28,10 +28,10 @@ type Value struct {
 	// text is the JSON of text, a number or a literal: the file's, with a
 	// number as Prettier writes it.
 	text string
-	// keys are an object's keys, in order, and elems its values, or a
-	// List's Items.
-	keys  []string
-	elems []*Value
+	// keys are an object's keys, in order, and values the value of each
+	// key, or a List's Items.
+	keys   []string
+	values []*Value
 }
 
 // Parse reads a content file. It accepts any JSON document, which the Field
@@ -52,7 +52,7 @@ func Parse(data []byte) (*Value, error) {
 // ParseChange reads a value a Change carries, from the Editor's JSON: text,
 // a number, a List's Items or an Item's Fields, and nothing else. It writes
 // text as JSON.stringify does and a number as JavaScript does, so that the
-// Changes of any client look alike in the content file.
+// Changes of any API client look alike in the content file.
 func ParseChange(data []byte) (*Value, error) {
 	dec := jsontext.NewDecoder(bytes.NewReader(data))
 	v, err := read(dec, true)
@@ -84,11 +84,11 @@ func read(dec *jsontext.Decoder, change bool) (*Value, error) {
 				}
 				v.keys = append(v.keys, name.String())
 			}
-			elem, err := read(dec, change)
+			value, err := read(dec, change)
 			if err != nil {
 				return nil, err
 			}
-			v.elems = append(v.elems, elem)
+			v.values = append(v.values, value)
 		}
 		_, err := dec.ReadToken()
 		return v, err
@@ -137,7 +137,7 @@ func (v *Value) At(path string) (*Value, bool) {
 	if !ok {
 		return nil, false
 	}
-	return parent.elems[i], true
+	return parent.values[i], true
 }
 
 // Replace puts value at path in place of the value there, and returns false
@@ -145,7 +145,7 @@ func (v *Value) At(path string) (*Value, bool) {
 func (v *Value) Replace(path string, value *Value) bool {
 	parent, i, ok := v.slot(path)
 	if ok {
-		parent.elems[i] = value
+		parent.values[i] = value
 	}
 	return ok
 }
@@ -160,7 +160,7 @@ func (v *Value) slot(path string) (parent *Value, index int, ok bool) {
 		case '{':
 			index = indexOf(v.keys, key)
 		case '[':
-			if i, err := strconv.Atoi(key); err == nil && isIndex(key) && i < len(v.elems) {
+			if i, err := strconv.Atoi(key); err == nil && isIndex(key) && i < len(v.values) {
 				index = i
 			}
 		}
@@ -170,7 +170,7 @@ func (v *Value) slot(path string) (parent *Value, index int, ok bool) {
 		if n == len(keys)-1 {
 			return v, index, true
 		}
-		v = v.elems[index]
+		v = v.values[index]
 	}
 	return nil, 0, false
 }
@@ -207,11 +207,11 @@ func Equal(a, b *Value) bool {
 		}
 		return x == y
 	case '[':
-		if len(a.elems) != len(b.elems) {
+		if len(a.values) != len(b.values) {
 			return false
 		}
-		for i := range a.elems {
-			if !Equal(a.elems[i], b.elems[i]) {
+		for i := range a.values {
+			if !Equal(a.values[i], b.values[i]) {
 				return false
 			}
 		}
@@ -222,7 +222,7 @@ func Equal(a, b *Value) bool {
 		}
 		for i, key := range a.keys {
 			j := indexOf(b.keys, key)
-			if j < 0 || !Equal(a.elems[i], b.elems[j]) {
+			if j < 0 || !Equal(a.values[i], b.values[j]) {
 				return false
 			}
 		}
@@ -262,13 +262,13 @@ func (v *Value) Decoded() any {
 	case '{':
 		object := make(map[string]any, len(v.keys))
 		for i, key := range v.keys {
-			object[key] = v.elems[i].Decoded()
+			object[key] = v.values[i].Decoded()
 		}
 		return object
 	case '[':
-		items := make([]any, len(v.elems))
-		for i, elem := range v.elems {
-			items[i] = elem.Decoded()
+		items := make([]any, len(v.values))
+		for i, item := range v.values {
+			items[i] = item.Decoded()
 		}
 		return items
 	case '"':
