@@ -231,10 +231,12 @@ paths:
         Publishes the Changes of a Draft on one page (P3). The server reads
         the page's content and Field definitions from the Site repository at
         `main` HEAD, and validates the Changes against them (V1). A Change
-        whose stored value is no longer its `before` is a Conflict (V2). The
-        Changes that merge become one commit on top of that HEAD, with a patch
-        bump of the Site's `package.json`, which a workflow in the Site
-        repository then cuts as a Release (V3).
+        whose stored value is no longer its `before` is a Conflict (V2),
+        unless the stored value is its `after` already: that Change is
+        already published, whatever its `before`, and has nothing to commit.
+        The Changes that merge become one commit on top of that HEAD, with a
+        patch bump of the Site's `package.json`, which a workflow in the
+        Site repository then cuts as a Release (V3).
 
         The Release ships everything on `main`. Once it has answered, the
         server notes on an issue of the Site repository the commits since the
@@ -264,8 +266,18 @@ paths:
         '202':
           description: |
             Committed. Every Change merged but those in `conflicts`, which the
-            Editor keeps in the Draft. The commit becomes a Release once the
-            Site's CI passes on it (ADR-0003).
+            Editor keeps in the Draft, and those already published, which are
+            neither in `conflicts` nor in the commit. The commit becomes a
+            Release once the Site's CI passes on it (ADR-0003).
+
+            When every Change is already published, as when the Client
+            publishes again a Draft whose answer they missed, nothing is
+            committed, and `sha` and `version` are the page's last Publish:
+            the newest commit on `main` that the edity-publisher GitHub App
+            made to the page's content, at its version, which the Editor
+            follows as its own. When the App made none, the Changes are
+            answered as though none were already published: each merges, or
+            is a Conflict when the stored value is not its `before`.
           content:
             application/json:
               schema:
@@ -307,8 +319,9 @@ paths:
                 $ref: '#/components/schemas/Message'
         '409':
           description: |
-            Every Change is a Conflict, so nothing merged and nothing was
-            committed (V2).
+            Nothing merged, so nothing was committed: every Change is a
+            Conflict (V2), or already published. `conflicts` lists the
+            Conflicts alone.
           content:
             application/json:
               schema:
@@ -576,7 +589,7 @@ components:
             $ref: '#/components/schemas/ContentValue'
 
     Published:
-      description: A Publish that was committed.
+      description: A Publish that was committed, or, when every Change was already published, the page's last Publish.
       type: object
       required: [sha, version]
       additionalProperties: false
@@ -601,7 +614,7 @@ components:
       additionalProperties: false
       properties:
         conflicts:
-          description: Every Change of the Publish.
+          description: Every Change of the Publish that is a Conflict, which is all of them but those already published.
           type: array
           minItems: 1
           items:

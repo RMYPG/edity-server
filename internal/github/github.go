@@ -401,6 +401,39 @@ func (r *Repo) GitCommit(ctx context.Context, sha string) (GitCommit, error) {
 	return c, nil
 }
 
+// Commits returns the newest commits from ref back that change the file at
+// path, newest first, as GitHub lists them: at most 30.
+func (r *Repo) Commits(ctx context.Context, ref, path string) ([]GitCommit, error) {
+	var listed []struct {
+		SHA    string `json:"sha"`
+		Commit struct {
+			Message string `json:"message"`
+			Author  struct {
+				Name string `json:"name"`
+			} `json:"author"`
+			Committer struct {
+				Date time.Time `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
+	}
+	query := url.Values{"sha": {ref}, "path": {path}, "per_page": {"30"}}
+	if err := r.get(ctx, "/repos/"+r.path("commits")+"?"+query.Encode(), &listed); err != nil {
+		return nil, err
+	}
+	commits := make([]GitCommit, 0, len(listed))
+	for _, l := range listed {
+		c := GitCommit{SHA: l.SHA, Message: l.Commit.Message, Author: l.Commit.Author.Name, Committed: l.Commit.Committer.Date}
+		for _, p := range l.Parents {
+			c.Parents = append(c.Parents, p.SHA)
+		}
+		commits = append(commits, c)
+	}
+	return commits, nil
+}
+
 // request is one call to GitHub.
 type request struct {
 	method string

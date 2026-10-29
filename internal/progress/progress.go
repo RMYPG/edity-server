@@ -34,7 +34,6 @@ package progress
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -248,7 +247,7 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 	if err != nil {
 		return Progress{}, nil, err
 	}
-	v, ok := versionOf(pkg)
+	v, ok := release.VersionOf(pkg)
 	if !ok {
 		return Progress{}, nil, fmt.Errorf("%s's package.json has no X.Y.Z version: %w", sha, ErrNotPublish)
 	}
@@ -464,15 +463,4 @@ func (rs runs) lastUpdated() time.Time {
 		}
 	}
 	return last
-}
-
-// versionOf reads the version of a package.json.
-func versionOf(pkg []byte) (release.Version, bool) {
-	var p struct {
-		Version string `json:"version"`
-	}
-	if json.Unmarshal(pkg, &p) != nil {
-		return release.Version{}, false
-	}
-	return release.ParseVersion(p.Version)
 }

@@ -47,7 +47,7 @@ func TestPublishOnTheSandbox(t *testing.T) {
 	}
 	app := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 30 * time.Second})
 	repo := app.Repo(sandbox.Repository.Owner, sandbox.Repository.Name)
-	p := publish.New(func(site.Repository) publish.Repository { return repo })
+	p := publish.New(func(site.Repository) publish.Repository { return repo }, app.BotLogin)
 	client := publish.Client{Name: "Edity end-to-end check"}
 	bot, err := app.BotLogin(ctx)
 	if err != nil {

@@ -3,6 +3,7 @@
 package release
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -31,6 +32,18 @@ func ParseVersion(s string) (Version, bool) {
 		v[i] = n
 	}
 	return v, true
+}
+
+// VersionOf reads the version of a package.json, and returns false when it
+// has none written X.Y.Z.
+func VersionOf(pkg []byte) (Version, bool) {
+	var p struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(pkg, &p) != nil {
+		return Version{}, false
+	}
+	return ParseVersion(p.Version)
 }
 
 // Less tells whether v is a lower version than w.
