@@ -26,6 +26,8 @@ mise run ci
 
 `mise run check:sandbox` publishes on `RMYPG/edity-sandbox` for real, with the same secrets: it changes a Field, waits for the Release, and puts it back, so it makes two commits on the sandbox's `main` and two Releases. It also checks that a Conflict and a broken Limit commit nothing. It takes as long as two runs of the sandbox's CI, and is not part of `mise run ci`.
 
+`mise run check:progress` only reads: it asks GitHub, as the App, how far the two Publishes `check:sandbox` made on 2026-10-29 have got, which is `released` as v1.0.1 and v1.0.2, and checks that asking again costs nothing against the rate limit.
+
 ## Configuration
 
 The server reads its environment at startup and refuses to start if a variable is missing or invalid.
@@ -56,7 +58,7 @@ The Sites file lists every Site the server works for. A request whose hostname i
 
 The server refuses to start on a Sites file it can't read unambiguously: unknown or repeated keys (in any letter case), anything after the JSON document, or a Site field that is missing or malformed. `githubRepository` follows GitHub's naming rules, `locale` is a BCP 47 tag such as `es` or `es-ES`, `zitadelRole` has no spaces, and the namespace and Deployment are valid Kubernetes names.
 
-`GET /healthz` answers Kubernetes probes on any hostname. Of the spec's API, `POST /_edity/api/publish` is implemented, and the other routes answer 501 until they are. No Client can log in before the Zitadel login exists, so every Publish gets 401 for now. Logs are JSON lines on stdout, one per request.
+`GET /healthz` answers Kubernetes probes on any hostname. Of the spec's API, `POST /_edity/api/publish` and `GET /_edity/api/publish/{sha}` are implemented, and the other routes answer 501 until they are. No Client can log in before the Zitadel login exists, so every Publish gets 401 for now. Logs are JSON lines on stdout, one per request.
 
 ## Publish
 
@@ -65,6 +67,19 @@ A Publish reads the page's content (`src/content/<page>.json`), its generated Fi
 The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes. `internal/content` ports Prettier's line fitting, with the width tables of the Prettier the Sites use: `internal/content/emoji.mjs` writes `emoji.go` from its bundle, and `internal/content/testdata/prettier.mjs` records what Prettier itself makes of the test cases. Run both again when the Sites move to another Prettier.
 
 Each Site may publish ten times at once, and thirty times an hour after that.
+
+## Publish progress
+
+`GET /_edity/api/publish/{sha}` works out how far a Publish has got from the Site repository on GitHub, on each request, and stores nothing. Only a commit the App authored is a Publish's; any other sha gets 404.
+
+- **validating** while the workflow runs that the commit's push started (`actions/runs?head_sha=…&event=push`) are under way, or before GitHub lists any.
+- **releasing** once they all passed, until a Release contains the commit.
+- **released** once the highest `vX.Y.Z` tag contains the commit (`compare/<sha>...<tag>`), the commit's own Release or a newer one. `release.yml` pushes the tag only once the image of that version exists. Tags only ever go on `main` with rising versions, so a tag older than the commit's `package.json` version is never compared.
+- **failed** when a CI run of the push failed, or the commit's Release on Publish run did, or nothing came of it in time: no CI run 10 minutes after the commit, or no Release 30 minutes after CI passed while no Release on Publish run of it is under way. A newer Release that contains the commit still makes it released.
+
+A Release on Publish run is the commit's when it is titled `Release <sha>`, as the template names it, and was created after CI last started. A run's own `head_sha` is `main` HEAD when it started, which can be a newer Publish's commit, so it is not used, and neither are check runs, which mix every workflow's jobs on a sha. A cancelled run counts as one a newer run took the place of. Until a Site's workflow names its runs, the commit is released by its tag alone.
+
+The App's rate limit is the installation's, 5,000 calls an hour shared by every Site. A request makes 4 calls, 5 while releasing. Each GET sends the ETag of GitHub's last answer to it, and GitHub does not count a call it answers 304, so a request that finds nothing new costs nothing, and requests for one commit within 5 seconds share one look. The tests count it: an hour of polling one Publish every 5 seconds makes about 2,900 calls, of which GitHub counts 17.
 
 ## API
 

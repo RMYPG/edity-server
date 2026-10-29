@@ -13,6 +13,7 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/config"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/publish"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
@@ -44,6 +45,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		Publisher: publish.New(func(r site.Repository) publish.Repository {
 			return publisher.Repo(r.Owner, r.Name)
 		}),
+		Tracker: progress.New(func(r site.Repository) progress.Repository {
+			return publisher.Repo(r.Owner, r.Name)
+		}, publisher.BotLogin),
 	}
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)
 	served := make(chan error, 1)

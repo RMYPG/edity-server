@@ -33,6 +33,11 @@ description = "Publish on RMYPG/edity-sandbox for real, twice, and wait for each
 env = { EDITY_SITES_FILE = "{{config_root}}/sites.dev.json" }
 run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run TestPublishOnTheSandbox -count=1 -timeout 75m -v ./internal/publish"
 
+[tasks."check:progress"]
+description = "Read the progress of the two Publishes check:sandbox made on RMYPG/edity-sandbox from GitHub, reading only, as the Developer's own Infisical user (not part of ci)"
+env = { EDITY_SITES_FILE = "{{config_root}}/sites.dev.json" }
+run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run TestProgressOnTheSandbox -count=1 -v ./internal/progress"
+
 [tasks.dev]
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
 env = { EDITY_SITES_FILE = "sites.dev.json" }

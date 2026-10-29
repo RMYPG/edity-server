@@ -14,6 +14,7 @@ type Services struct {
 	// Sessions is NoSessions when it is nil.
 	Sessions  Sessions
 	Publisher Publisher
+	Tracker   Tracker
 	// RateLimit is DefaultRateLimit when it is zero.
 	RateLimit RateLimit
 }
@@ -35,12 +36,16 @@ func New(sites *site.Registry, logger *slog.Logger, services Services) http.Hand
 		limit:     newLimiter(limit, time.Now),
 		logger:    logger,
 	})
+	api.Handle("GET /_edity/api/publish/{sha}", &progressHandler{
+		sessions: services.Sessions,
+		tracker:  services.Tracker,
+		logger:   logger,
+	})
 	for _, route := range []string{
 		"GET /_edity/login",
 		"GET /_edity/api/auth/callback",
 		"POST /_edity/api/auth/logout",
 		"GET /_edity/api/session",
-		"GET /_edity/api/publish/{sha}",
 	} {
 		api.HandleFunc(route, notImplemented)
 	}

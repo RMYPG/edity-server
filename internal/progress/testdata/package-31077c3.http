@@ -1,0 +1,50 @@
+HTTP/2.0 200 OK
+Content-Type: application/vnd.github.raw+json; charset=utf-8
+Etag: "a56183fdc388ff915ebd21b17d55b15444ad1c37"
+Last-Modified: Mon, 26 Oct 2026 23:46:43 GMT
+X-Github-Api-Version-Selected: 2026-03-10
+
+{
+  "name": "static-astro-site-template",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro check && astro build",
+    "check": "astro check",
+    "preview": "astro preview",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:a11y": "playwright test",
+    "ci": "node --run format:check && node --run lint && node --run check && node --run test:a11y",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.11",
+    "@edity/astro": "^0.1.0",
+    "@edity/core": "^0.1.0",
+    "astro": "^7.4.1",
+    "sharp": "^0.35.5",
+    "typescript": "^6.0.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-astro": "^3.2.1",
+    "eslint-plugin-jsx-a11y-x": "^0.2.0",
+    "prettier": "^3.9.10",
+    "prettier-plugin-astro": "^1.1.1",
+    "typescript-eslint": "^8.72.0"
+  },
+  "packageManager": "pnpm@12.14.0+sha512.c18ba6d87993d3d164cb5e8948f32b2c06ee854487e06cd8d86781342fb3e5bb4634367034711e86802baa9c37bea906ce1929ad08d70884c97d801df13389a6"
+}
