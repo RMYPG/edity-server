@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/RMYPG/edity-server/internal/apitest"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -42,28 +44,19 @@ func TestHealthAnswersOKWhateverTheHost(t *testing.T) {
 	}
 }
 
-// apiRoutes is the API table of the spec.
-var apiRoutes = []struct{ method, path string }{
-	{http.MethodGet, "/_edity/login"},
-	{http.MethodGet, "/_edity/api/auth/callback"},
-	{http.MethodPost, "/_edity/api/auth/logout"},
-	{http.MethodGet, "/_edity/api/session"},
-	{http.MethodPost, "/_edity/api/publish"},
-	{http.MethodGet, "/_edity/api/publish/0123abc"},
-}
-
 func TestEveryRouteAnswersNotFoundForAnUnknownHost(t *testing.T) {
-	handler := newServer(t, io.Discard)
+	// The 404 is the one the OpenAPI file describes.
+	handler := apitest.Handler(t, newServer(t, io.Discard))
 
-	for _, route := range apiRoutes {
+	for _, op := range apitest.Operations(t) {
 		for _, host := range []string{"unknown.example.com", "10.0.0.7:8080", ""} {
-			req := httptest.NewRequestWithContext(t.Context(), route.method, route.path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), op.Method, op.Example, nil)
 			req.Host = host
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusNotFound {
-				t.Errorf("%s %s on %q: status = %d, want %d", route.method, route.path, host, rec.Code, http.StatusNotFound)
+				t.Errorf("%s %s on %q: status = %d, want %d", op.Method, op.Example, host, rec.Code, http.StatusNotFound)
 			}
 		}
 	}
@@ -91,18 +84,55 @@ func TestAnUnknownHostGetsNotFoundWhateverThePathSpelling(t *testing.T) {
 	}
 }
 
-func TestEveryRouteReachesItsHandlerForAKnownSite(t *testing.T) {
-	handler := newServer(t, io.Discard)
-
-	for _, route := range apiRoutes {
-		req := httptest.NewRequestWithContext(t.Context(), route.method, route.path, nil)
+func TestAKnownSiteIsServedTheRoutesOfTheOpenAPIFileAndNothingElse(t *testing.T) {
+	handler := apitest.Handler(t, newServer(t, io.Discard))
+	request := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 		req.Host = "sandbox.example.com"
+		// From the Site's own page, which the API's Origin check lets through.
+		req.Header.Set("Origin", "https://sandbox.example.com")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
+		return rec
+	}
 
-		// Every route is answered 501 until it is implemented.
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("%s %s: status = %d, want %d", route.method, route.path, rec.Code, http.StatusNotImplemented)
+	// On each of the file's paths, another method gets 405, and its Allow
+	// header lists the methods the server serves there: those of the file,
+	// with HEAD for GET, as net/http serves HEAD wherever it serves GET.
+	documented := map[string][]string{}
+	for _, op := range apitest.Operations(t) {
+		documented[op.Example] = append(documented[op.Example], op.Method)
+		if op.Method == http.MethodGet {
+			documented[op.Example] = append(documented[op.Example], http.MethodHead)
+		}
+	}
+	for path, methods := range documented {
+		slices.Sort(methods)
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions} {
+			if slices.Contains(methods, method) {
+				continue
+			}
+			rec := request(method, path)
+			allowed := strings.Split(rec.Header().Get("Allow"), ", ")
+			slices.Sort(allowed)
+			if rec.Code != http.StatusMethodNotAllowed || !slices.Equal(allowed, methods) {
+				t.Errorf("%s %s: status = %d, Allow = %q, want %d and %q", method, path, rec.Code, rec.Header().Get("Allow"), http.StatusMethodNotAllowed, strings.Join(methods, ", "))
+			}
+		}
+	}
+
+	// Paths near the file's get 404.
+	sha := "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2"
+	for _, path := range []string{
+		"/", "/_edity", "/_edity/", "/_edity/login/", "/_edity/editor.0123456789.js",
+		"/_edity/api", "/_edity/api/", "/_edity/api/session/", "/_edity/api/sessions",
+		"/_edity/api/auth", "/_edity/api/auth/", "/_edity/api/auth/login",
+		"/_edity/api/publish/", "/_edity/api/publish/" + sha + "/", "/_edity/api/publish/" + sha + "/stage",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			if rec := request(method, path); rec.Code != http.StatusNotFound {
+				t.Errorf("%s %s: status = %d, want %d", method, path, rec.Code, http.StatusNotFound)
+			}
 		}
 	}
 }
