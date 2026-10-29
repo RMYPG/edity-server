@@ -1,17 +1,18 @@
 // Writes core-violations.json: what @edity/core's violations() finds in each
 // Draft of the page fixtures, which the Editor checks a Draft with. The Go
-// tests check that this package names the same violations.
+// tests check that this package names the same violations. It reads core
+// and the fixtures from the edity checkout it is given, which has to be at
+// the contracts tag go.mod pins and built with `mise run build`. Run it with
 //
-// Run it, from this repository's root, in an edity checkout at the contracts
-// tag go.mod pins, built with `mise run build`, with that checkout's Node:
-//
-//   mise -C <edity> exec -- node "$PWD/internal/fields/testdata/core-violations.mjs" \
-//     > internal/fields/testdata/core-violations.json
-import { readdirSync, readFileSync } from 'node:fs';
+//   mise run record:core-violations <edity>
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const edity = process.cwd();
+const edity = process.argv[2];
+if (!edity) {
+  throw new Error('Give the path of an edity checkout built with `mise run build`.');
+}
 const { defineFields, definitionOf, list, number, text, violations } =
   await import(pathToFileURL(join(edity, 'packages/core/dist/index.js')).href);
 
@@ -64,4 +65,4 @@ for (const name of readdirSync(pages).filter((n) => n.endsWith('.json')).sort())
     }
   }
 }
-process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+writeFileSync(new URL('core-violations.json', import.meta.url), `${JSON.stringify(out, null, 2)}\n`);

@@ -3,7 +3,7 @@
 # the two Publishes of 2026-10-29 and the Developer commit before them. Every
 # call is a read, made as whoever gh is logged in as. Each file keeps the
 # status line, the headers the server reads and the body, as GitHub sent them.
-# Run it from this directory.
+# Run it with `mise run record:progress`.
 set -euo pipefail
 
 repo=repos/RMYPG/edity-sandbox
@@ -11,17 +11,8 @@ first=4bc931076ac8583bd8905a4c508c987877afc09d  # v1.0.1
 second=f50d2c45e28706d25da874225f0f64770cd1ac12 # v1.0.2
 developer=31077c358f1b793aefc1c495c938055d99d3c227
 
-# record <file> <path> [<accept>]
-record() {
-	gh api --include --method GET \
-		--header "X-GitHub-Api-Version: 2026-03-10" \
-		--header "Accept: ${3:-application/vnd.github+json}" "$2" |
-		tr -d '\r' |
-		awk 'NR == 1 { print; next }
-			body { print; next }
-			/^$/ { print; body = 1; next }
-			tolower($0) ~ /^(content-type|etag|last-modified|link|x-github-api-version-selected):/ { print }' >"$1"
-}
+# shellcheck source-path=SCRIPTDIR source=../../githubtest/record.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../githubtest/record.sh"
 
 for sha in "$first" "$second" "$developer"; do
 	record "commit-${sha:0:7}.http" "$repo/git/commits/$sha"

@@ -28,6 +28,12 @@ mise run ci
 
 `mise run check:progress` only reads: it asks GitHub, as the App, how far the two Publishes `check:sandbox` made on 2026-10-29 have got, which is `released` as v1.0.1 and v1.0.2, and checks that asking again costs nothing against the rate limit.
 
+The tests replay what others answered, recorded once:
+
+- `mise run record:progress` and `mise run record:issues` record GitHub's answers about `RMYPG/edity-sandbox` that `internal/progress` and `internal/issues` replay, with read-only calls made as whoever `gh` is logged in as.
+- `mise run record:prettier <edity>` records what Prettier makes of `internal/content`'s cases, and `mise run generate:emoji <edity>` writes `internal/content/emoji.go`, the width tables Prettier fits lines with (see [Publish](#publish)). Both run the Prettier of the edity checkout at `<edity>`, after `mise run deps` there.
+- `mise run record:core-violations <edity>` records what `@edity/core` finds in the contracts' page fixtures, which `internal/fields` compares with its own. The edity checkout has to be at the contracts tag `go.mod` pins, built with `mise run build`.
+
 ## Configuration
 
 The server reads its environment at startup and refuses to start if a variable is missing or invalid.
@@ -64,7 +70,7 @@ The server refuses to start on a Sites file it can't read unambiguously: unknown
 
 A Publish reads the page's content (`src/content/<page>.json`), its generated Field definitions (`src/content/<page>.schema.json`) and `package.json` from the Site repository at `main` HEAD, as the `edity-publisher` GitHub App. A Change whose stored value is not its `before`, or whose Field or Item is gone, is a Conflict. The others merge, and the content they make must pass the Field definitions as a whole, Fields no Change touched included. The commit goes on top of that exact HEAD through GraphQL's `createCommitOnBranch`: it holds the content file and `package.json` with its patch bumped, and nothing else. If `main` moved in the meantime, the Publish reads it again and starts over, and gives up after three attempts.
 
-The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes. `internal/content` ports Prettier's line fitting, with the width tables of the Prettier the Sites use: `internal/content/emoji.mjs` writes `emoji.go` from its bundle, and `internal/content/testdata/prettier.mjs` records what Prettier itself makes of the test cases. Run both again when the Sites move to another Prettier.
+The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes. `internal/content` ports Prettier's line fitting, with the width tables of the Prettier the Sites use: `mise run generate:emoji <edity>` writes `emoji.go` from its bundle, and `mise run record:prettier <edity>` records what Prettier itself makes of the test cases. Run both again when the Sites move to another Prettier.
 
 Each Site may publish ten times at once, and thirty times an hour after that.
 
