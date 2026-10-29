@@ -29,7 +29,7 @@ const twoSites = `{
   "sites": [
     {
       "id": "edity-sandbox",
-      "hostnames": ["sandbox.example.com"],
+      "hostnames": ["sandbox.example.com", "www.sandbox.example.com", "localhost"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
       "zitadelRole": "site:edity-sandbox",
@@ -228,8 +228,13 @@ func TestAPublishWithoutASessionGets401(t *testing.T) {
 func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 	for _, origin := range []string{
 		"", "null", "https://evil.example.com", "https://sandbox.example.com.evil.example.com",
-		"https://sandbox.example.com:8443", "https://fisioindoor.example.com", "ftp://sandbox.example.com",
+		"https://fisioindoor.example.com", "ftp://sandbox.example.com",
 		"https://sandbox.example.com/page", "https://user@sandbox.example.com", "sandbox.example.com",
+		// Over http, as the server sees every request behind Cloudflare
+		// Tunnel, from a hostname that is not loopback.
+		"http://sandbox.example.com", "http://sandbox.example.com:80",
+		// Loopback, but none of the Site's hostnames.
+		"http://127.0.0.1:4321", "https://localhost.evil.example.com",
 	} {
 		p := &fakePublisher{}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
@@ -242,8 +247,12 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 			t.Errorf("Origin %q: status = %d, published %d times, want 403 and none", origin, rec.Code, p.calls())
 		}
 	}
-	// The same origin, whatever the case of its host or its scheme.
-	for _, origin := range []string{"https://Sandbox.Example.com", "http://sandbox.example.com"} {
+	// One of the Site's hostnames over https, whatever the case of its
+	// host or its port, and localhost over http, as in development.
+	for _, origin := range []string{
+		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:8443",
+		"https://www.sandbox.example.com", "http://localhost:4321", "https://localhost",
+	} {
 		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { r.Header.Set("Origin", origin) })
 		if rec.Code != http.StatusAccepted {

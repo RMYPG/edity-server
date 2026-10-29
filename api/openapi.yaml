@@ -33,7 +33,10 @@ info:
       whose inline check loads the Editor only when it is there (A4).
 
     The routes under `/_edity/api/` other than the login callback refuse a
-    request from another origin (A4).
+    request from another origin (A4). A Site's own origins are
+    `https://<hostname>`, on any port, for each of its hostnames, and
+    `http://<hostname>` too when the hostname is a loopback one such as
+    `localhost`, as in development.
 
     Sites built with an older Editor keep calling the server, so a change to
     this file keeps the calls of earlier Editors working.
@@ -474,8 +477,8 @@ components:
             $ref: '#/components/schemas/Message'
     ForeignOrigin:
       description: |
-        The request's `Origin` is not the Site's own, or it is a `POST`
-        without an `Origin` (A4).
+        The request's `Origin` is not one of the Site's own, or it is a
+        `POST` without an `Origin` (A4).
       content:
         text/plain:
           schema:

@@ -225,6 +225,27 @@ func (reg *Registry) Lookup(host string) (Site, bool) {
 	return s, ok
 }
 
+// HasHostname tells whether host, a hostname with no port, is one of the
+// Site's, whatever its case.
+func (s Site) HasHostname(host string) bool {
+	for _, h := range s.Hostnames {
+		if canonicalHost(h) == canonicalHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLoopback tells whether host, a hostname with no port, names the machine
+// it is on: localhost or a name under it (RFC 6761), or a loopback address.
+func IsLoopback(host string) bool {
+	host = canonicalHost(host)
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
+}
+
 // canonicalHost ignores case and the trailing dot of a fully qualified name.
 func canonicalHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(host), ".")

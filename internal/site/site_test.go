@@ -91,6 +91,33 @@ func TestLookupFindsNoSiteForAnUnknownHost(t *testing.T) {
 	}
 }
 
+func TestASiteHasEachOfItsHostnamesWhateverTheirCase(t *testing.T) {
+	s := site.Site{Hostnames: []string{"sandbox.example.com", "localhost"}}
+	for _, host := range []string{"sandbox.example.com", "Sandbox.Example.COM", "sandbox.example.com.", "localhost"} {
+		if !s.HasHostname(host) {
+			t.Errorf("HasHostname(%q) = false", host)
+		}
+	}
+	for _, host := range []string{"", "example.com", "www.sandbox.example.com", "sandbox.example.com:443", "127.0.0.1"} {
+		if s.HasHostname(host) {
+			t.Errorf("HasHostname(%q) = true", host)
+		}
+	}
+}
+
+func TestLoopbackHostnames(t *testing.T) {
+	for _, host := range []string{"localhost", "LOCALHOST", "localhost.", "sandbox.localhost", "127.0.0.1", "127.0.0.53", "::1"} {
+		if !site.IsLoopback(host) {
+			t.Errorf("IsLoopback(%q) = false", host)
+		}
+	}
+	for _, host := range []string{"", "sandbox.example.com", "localhost.example.com", "mylocalhost", "10.0.0.1", "::"} {
+		if site.IsLoopback(host) {
+			t.Errorf("IsLoopback(%q) = true", host)
+		}
+	}
+}
+
 func TestRequireGivesTheHandlerTheSiteOfTheRequest(t *testing.T) {
 	sites, err := site.Parse(strings.NewReader(sandbox))
 	if err != nil {

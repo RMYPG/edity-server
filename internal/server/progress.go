@@ -35,7 +35,7 @@ func (h *progressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s, _ := site.FromContext(r.Context())
 	// A browser sends no Origin with a GET from the page's own origin, and
 	// one with a GET from any other.
-	if r.Header.Get("Origin") != "" && !sameOrigin(r) {
+	if r.Header.Get("Origin") != "" && !fromSite(r, s) {
 		http.Error(w, "The request does not come from the Site's own origin.", http.StatusForbidden)
 		return
 	}

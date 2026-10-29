@@ -127,7 +127,7 @@ func TestTheProgressWithoutASessionGets401(t *testing.T) {
 func TestTheProgressAskedFromAnotherOriginGets403(t *testing.T) {
 	tracker := &fakeTracker{progress: progress.Progress{Stage: progress.Validating, Version: release.Version{1, 0, 1}}}
 	h := progressServer(t, cookieSessions{}, tracker)
-	for _, origin := range []string{"null", "https://evil.example.com", "https://fisioindoor.example.com", "https://sandbox.example.com:8443"} {
+	for _, origin := range []string{"null", "https://evil.example.com", "https://fisioindoor.example.com", "http://sandbox.example.com"} {
 		if rec := get(t, h, commit, func(r *http.Request) { r.Header.Set("Origin", origin) }); rec.Code != http.StatusForbidden {
 			t.Errorf("Origin %q: status = %d, want 403", origin, rec.Code)
 		}
@@ -135,8 +135,10 @@ func TestTheProgressAskedFromAnotherOriginGets403(t *testing.T) {
 	if tracker.calls() != 0 {
 		t.Errorf("GitHub was asked %d times from another origin", tracker.calls())
 	}
-	if rec := get(t, h, commit, func(r *http.Request) { r.Header.Set("Origin", "https://sandbox.example.com") }); rec.Code != http.StatusOK {
-		t.Errorf("from the Site's own origin: status = %d, want 200", rec.Code)
+	for _, origin := range []string{"https://sandbox.example.com", "https://sandbox.example.com:8443", "http://localhost:4321"} {
+		if rec := get(t, h, commit, func(r *http.Request) { r.Header.Set("Origin", origin) }); rec.Code != http.StatusOK {
+			t.Errorf("from the Site's own origin %q: status = %d, want 200", origin, rec.Code)
+		}
 	}
 }
 

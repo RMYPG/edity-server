@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/content"
@@ -82,7 +81,7 @@ type publishHandler struct {
 // ServeHTTP answers POST /_edity/api/publish.
 func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s, _ := site.FromContext(r.Context())
-	if !sameOrigin(r) {
+	if !fromSite(r, s) {
 		http.Error(w, "The request does not come from the Site's own origin.", http.StatusForbidden)
 		return
 	}
@@ -220,16 +219,29 @@ func readDraft(body []byte) (publish.Draft, error) {
 	return d, nil
 }
 
-// sameOrigin tells whether r comes from a page on the Site's own origin, its
-// scheme and the host it was sent to (A4). A browser sends Origin with
-// every POST.
-func sameOrigin(r *http.Request) bool {
+// fromSite tells whether r comes from a page of s, by its Origin (A4): one
+// of the Site's hostnames over https, on any port, or over http only for a
+// loopback hostname such as localhost, which a Site has in development
+// (sites.dev.json). The request's own scheme says nothing of the page's:
+// behind Cloudflare Tunnel the server sees every request over http. A
+// browser sends Origin with every POST.
+func fromSite(r *http.Request, s site.Site) bool {
 	origin, err := url.Parse(r.Header.Get("Origin"))
-	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") ||
-		origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+	if err != nil || origin.Host == "" || origin.Opaque != "" || origin.User != nil ||
+		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return false
 	}
-	return strings.EqualFold(origin.Host, r.Host)
+	host := origin.Hostname()
+	switch origin.Scheme {
+	case "https":
+	case "http":
+		if !site.IsLoopback(host) {
+			return false
+		}
+	default:
+		return false
+	}
+	return s.HasHostname(host)
 }
 
 type conflict struct {
