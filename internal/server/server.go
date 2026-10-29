@@ -9,16 +9,37 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
+// Services are what the routes work with.
+type Services struct {
+	// Sessions is NoSessions when it is nil.
+	Sessions  Sessions
+	Publisher Publisher
+	// RateLimit is DefaultRateLimit when it is zero.
+	RateLimit RateLimit
+}
+
 // New returns the server's handler. Apart from the health check, it answers
 // only requests for one of sites, and 404 to any other host.
-func New(sites *site.Registry, logger *slog.Logger) http.Handler {
+func New(sites *site.Registry, logger *slog.Logger, services Services) http.Handler {
+	if services.Sessions == nil {
+		services.Sessions = NoSessions{}
+	}
+	limit := services.RateLimit
+	if limit.Burst == 0 || limit.Every == 0 {
+		limit = DefaultRateLimit
+	}
 	api := http.NewServeMux()
+	api.Handle("POST /_edity/api/publish", &publishHandler{
+		sessions:  services.Sessions,
+		publisher: services.Publisher,
+		limit:     newLimiter(limit, time.Now),
+		logger:    logger,
+	})
 	for _, route := range []string{
 		"GET /_edity/login",
 		"GET /_edity/api/auth/callback",
 		"POST /_edity/api/auth/logout",
 		"GET /_edity/api/session",
-		"POST /_edity/api/publish",
 		"GET /_edity/api/publish/{sha}",
 	} {
 		api.HandleFunc(route, notImplemented)

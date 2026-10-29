@@ -1,0 +1,43 @@
+{
+  "brand": {
+    "name": "Fisio Sandbox"
+  },
+  "hero": {
+    "title": "Fisioterapia cerca de ti, sin esperas",
+    "lead": "Valoramos tu caso en la primera visita y te proponemos un plan claro, con ejercicios que puedes hacer en casa entre sesiones.",
+    "cta": "Reserva tu cita"
+  },
+  "stats": {
+    "patients": 12500
+  },
+  "visit": {
+    "label": "Primera visita",
+    "price": 35
+  },
+  "services": [
+    "Fisioterapia deportiva",
+    "Suelo pélvico",
+    "Punción seca",
+    "Rehabilitación tras cirugía 🦴"
+  ],
+  "plans": [
+    {
+      "name": "Básico",
+      "price": 19.99,
+      "features": ["Una sesión al mes", "Seguimiento por WhatsApp"]
+    },
+    {
+      "name": "Completo",
+      "price": 49.5,
+      "features": [
+        "Cuatro sesiones al mes",
+        "Plan de ejercicios en casa",
+        "Revisión trimestral 🧑‍⚕️"
+      ]
+    }
+  ],
+  "contact": {
+    "title": "¿Hablamos de tu caso?",
+    "call": "Llámanos"
+  }
+}

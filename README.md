@@ -24,6 +24,8 @@ mise run ci
 
 `mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`.
 
+`mise run check:sandbox` publishes on `RMYPG/edity-sandbox` for real, with the same secrets: it changes a Field, waits for the Release, and puts it back, so it makes two commits on the sandbox's `main` and two Releases. It also checks that a Conflict and a broken Limit commit nothing. It takes as long as two runs of the sandbox's CI, and is not part of `mise run ci`.
+
 ## Configuration
 
 The server reads its environment at startup and refuses to start if a variable is missing or invalid.
@@ -54,7 +56,15 @@ The Sites file lists every Site the server works for. A request whose hostname i
 
 The server refuses to start on a Sites file it can't read unambiguously: unknown or repeated keys (in any letter case), anything after the JSON document, or a Site field that is missing or malformed. `githubRepository` follows GitHub's naming rules, `locale` is a BCP 47 tag such as `es` or `es-ES`, `zitadelRole` has no spaces, and the namespace and Deployment are valid Kubernetes names.
 
-`GET /healthz` answers Kubernetes probes on any hostname. The routes of the spec's API answer 501 until they are implemented. Logs are JSON lines on stdout, one per request.
+`GET /healthz` answers Kubernetes probes on any hostname. Of the spec's API, `POST /_edity/api/publish` is implemented, and the other routes answer 501 until they are. No Client can log in before the Zitadel login exists, so every Publish gets 401 for now. Logs are JSON lines on stdout, one per request.
+
+## Publish
+
+A Publish reads the page's content (`src/content/<page>.json`), its generated Field definitions (`src/content/<page>.schema.json`) and `package.json` from the Site repository at `main` HEAD, as the `edity-publisher` GitHub App. A Change whose stored value is not its `before`, or whose Field or Item is gone, is a Conflict. The others merge, and the content they make must pass the Field definitions as a whole, Fields no Change touched included. The commit goes on top of that exact HEAD through GraphQL's `createCommitOnBranch`: it holds the content file and `package.json` with its patch bumped, and nothing else. If `main` moved in the meantime, the Publish reads it again and starts over, and gives up after three attempts.
+
+The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes. `internal/content` ports Prettier's line fitting, with the width tables of the Prettier the Sites use: `internal/content/emoji.mjs` writes `emoji.go` from its bundle, and `internal/content/testdata/prettier.mjs` records what Prettier itself makes of the test cases. Run both again when the Sites move to another Prettier.
+
+Each Site may publish ten times at once, and thirty times an hour after that.
 
 ## API
 

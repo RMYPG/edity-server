@@ -28,6 +28,11 @@ run = "go test ./..."
 description = "Run the linters and the tests, as CI does before building the image"
 depends = ["lint", "test"]
 
+[tasks."check:sandbox"]
+description = "Publish on RMYPG/edity-sandbox for real, twice, and wait for each Release, as the Developer's own Infisical user (not part of ci)"
+env = { EDITY_SITES_FILE = "{{config_root}}/sites.dev.json" }
+run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run TestPublishOnTheSandbox -count=1 -timeout 75m -v ./internal/publish"
+
 [tasks.dev]
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
 env = { EDITY_SITES_FILE = "sites.dev.json" }
