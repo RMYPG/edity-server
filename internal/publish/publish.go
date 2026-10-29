@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,11 +110,8 @@ func (d Draft) Check() error {
 		if c.Before == nil || c.After == nil {
 			return fmt.Errorf("the Change to %s has no value before or after", c.Path)
 		}
-		keys := strings.Split(c.Path, ".")
-		for _, key := range keys {
-			if key == "" {
-				return fmt.Errorf("%q is not a content path", c.Path)
-			}
+		if keys := content.Keys(c.Path); len(keys) == 0 || slices.Contains(keys, "") {
+			return fmt.Errorf("%q is not a content path", c.Path)
 		}
 		if paths[c.Path] {
 			return fmt.Errorf("two Changes to %s", c.Path)
@@ -121,7 +119,7 @@ func (d Draft) Check() error {
 		paths[c.Path] = true
 	}
 	for path := range paths {
-		keys := strings.Split(path, ".")
+		keys := content.Keys(path)
 		for n := 1; n < len(keys); n++ {
 			if outer := strings.Join(keys[:n], "."); paths[outer] {
 				return fmt.Errorf("a Change to %s inside the Change to %s", path, outer)

@@ -153,14 +153,14 @@ func (v *Value) Replace(path string, value *Value) bool {
 // slot finds the object or List the value at path is in, and its place
 // there.
 func (v *Value) slot(path string) (parent *Value, index int, ok bool) {
-	keys := strings.Split(path, ".")
+	keys := Keys(path)
 	for n, key := range keys {
 		index = -1
 		switch v.kind {
 		case '{':
 			index = indexOf(v.keys, key)
 		case '[':
-			if i, err := strconv.Atoi(key); err == nil && isIndex(key) && i < len(v.values) {
+			if i, ok := Index(key); ok && i < len(v.values) {
 				index = i
 			}
 		}
@@ -175,18 +175,30 @@ func (v *Value) slot(path string) (parent *Value, index int, ok bool) {
 	return nil, 0, false
 }
 
-// isIndex tells whether key is an Item's index as a content path writes it:
-// digits with no leading zero.
-func isIndex(key string) bool {
+// Keys splits a content path into its keys and Item indices, which it
+// writes dot-separated, as the Editor writes a Change's path: hero.title,
+// services.2, plans.1.features.0. The page itself, "", has none.
+func Keys(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return strings.Split(path, ".")
+}
+
+// Index returns the Item index that key of a content path is, and false
+// when key is not one. An index is written as the Editor writes it, digits
+// with no leading zero, so that one Item has one path.
+func Index(key string) (int, bool) {
 	if key == "" || (key[0] == '0' && len(key) > 1) {
-		return false
+		return 0, false
 	}
 	for _, r := range key {
 		if r < '0' || r > '9' {
-			return false
+			return 0, false
 		}
 	}
-	return true
+	i, err := strconv.Atoi(key)
+	return i, err == nil
 }
 
 // Equal tells whether a and b are the same content value, as the Editor

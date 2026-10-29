@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -190,6 +191,28 @@ func TestParseChangeTakesOnlyContentValues(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("ParseChange(%s) = %s, want %s", value, got, want)
+		}
+	}
+}
+
+func TestAContentPathIsKeysAndItemIndices(t *testing.T) {
+	for path, want := range map[string][]string{
+		"hero.title":         {"hero", "title"},
+		"plans.1.features.0": {"plans", "1", "features", "0"},
+		"":                   nil,
+	} {
+		if got := Keys(path); !slices.Equal(got, want) {
+			t.Errorf("Keys(%q) = %q, want %q", path, got, want)
+		}
+	}
+	for key, want := range map[string]int{"0": 0, "7": 7, "12": 12} {
+		if got, ok := Index(key); !ok || got != want {
+			t.Errorf("Index(%q) = %d, %t, want %d", key, got, ok, want)
+		}
+	}
+	for _, key := range []string{"", "00", "01", "-1", "+1", "1e2", "x", "99999999999999999999"} {
+		if got, ok := Index(key); ok {
+			t.Errorf("Index(%q) = %d, want none", key, got)
 		}
 	}
 }

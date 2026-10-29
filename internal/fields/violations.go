@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/RMYPG/edity-server/internal/content"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
@@ -141,17 +142,17 @@ func limitOf(k jsonschema.ErrorKind) Limit {
 // compareViolations orders violations by path, key by key and Item indices
 // by number, and then as limitOrder does.
 func compareViolations(a, b Violation) int {
-	if c := slices.CompareFunc(strings.Split(a.Path, "."), strings.Split(b.Path, "."), compareKeys); c != 0 {
+	if c := slices.CompareFunc(content.Keys(a.Path), content.Keys(b.Path), compareKeys); c != 0 {
 		return c
 	}
 	return cmp.Compare(slices.Index(limitOrder, a.Limit), slices.Index(limitOrder, b.Limit))
 }
 
 func compareKeys(a, b string) int {
-	if isIndex(a) && isIndex(b) {
-		if c := cmp.Compare(len(a), len(b)); c != 0 {
-			return c
-		}
+	i, aIndex := content.Index(a)
+	j, bIndex := content.Index(b)
+	if aIndex && bIndex {
+		return cmp.Compare(i, j)
 	}
 	return strings.Compare(a, b)
 }
