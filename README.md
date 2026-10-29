@@ -70,9 +70,24 @@ The server refuses to start on a Sites file it can't read unambiguously: unknown
 
 A Publish reads the page's content (`src/content/<page>.json`), its generated Field definitions (`src/content/<page>.schema.json`) and `package.json` from the Site repository at `main` HEAD, as the `edity-publisher` GitHub App. A Change whose stored value is not its `before`, or whose Field or Item is gone, is a Conflict. The others merge, and the content they make must pass the Field definitions as a whole, Fields no Change touched included. The commit goes on top of that exact HEAD through GraphQL's `createCommitOnBranch`: it holds the content file and `package.json` with its patch bumped, and nothing else. If `main` moved in the meantime, the Publish reads it again and starts over, and gives up after three attempts.
 
-The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes. `internal/content` ports Prettier's line fitting, with the width tables of the Prettier the Sites use: `mise run generate:emoji <edity>` writes `emoji.go` from its bundle, and `mise run record:prettier <edity>` records what Prettier itself makes of the test cases. Run both again when the Sites move to another Prettier.
+The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes (see [Content files and Prettier](#content-files-and-prettier)).
 
 Each Site may publish ten times at once, and thirty times an hour after that.
+
+## Content files and Prettier
+
+A Site's CI runs `prettier --check`, so a content file the server writes has to be the one Prettier would write, or the Publish fails in CI (N3). The server does not run Prettier: `internal/content/format.go` ports what Prettier 3.9 does with a JSON file under its default options. It keeps a line break after each object's opening brace, puts a List on one line when it fits in 80 columns and else an Item per line, or as many numbers per line as fit, indents by 2 spaces and ends lines with `\n`. It measures a line as Prettier does, with Prettier's `getStringWidth` and its tables of emoji and East Asian wide characters, generated into `internal/content/emoji.go`.
+
+So for `src/content/*.json` a Site keeps:
+
+- **Prettier's defaults for JSON**: `printWidth` 80, `tabWidth` 2, `useTabs` false, `endOfLine` `lf`, `objectWrap` `preserve`, and the `json` parser Prettier picks for a `.json` file. No option in the Site's Prettier config, no `overrides` entry that matches those files, and no `.editorconfig` section that does (`indent_style`, `indent_size`, `tab_width`, `max_line_length`, `end_of_line`, which Prettier reads too) may set them otherwise.
+- **Prettier 3.x, at the minor the tables come from**: 3.9 today, `prettierVersion` in `emoji.go`. Another minor can measure a line differently, as when it updates its emoji.
+
+When the Sites move to another Prettier:
+
+1. In an edity checkout whose `package.json` takes that Prettier, run `mise run deps`.
+2. Run `mise run generate:emoji <edity>`. It fails if that Prettier's `getStringWidth` is no longer the function `internal/content/width.go` ports, which then has to be ported again.
+3. Run `mise run record:prettier <edity>`, which records what that Prettier makes of the content tests' files, texts and numbers, and then `mise run test`, which checks `internal/content` against all of them.
 
 ## Publish progress
 

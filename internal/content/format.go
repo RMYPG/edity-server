@@ -2,7 +2,8 @@ package content
 
 import "strings"
 
-// printWidth is Prettier's default, which the Sites keep.
+// printWidth is Prettier's default, which the Sites keep for their content
+// files (README.md, "Content files and Prettier").
 const printWidth = 80
 
 // Format writes a content file as Prettier formats JSON that has a line
