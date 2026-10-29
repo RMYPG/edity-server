@@ -85,11 +85,14 @@ So for `src/content/*.json` a Site keeps:
 - **Prettier's defaults for JSON**: `printWidth` 80, `tabWidth` 2, `useTabs` false, `endOfLine` `lf`, `objectWrap` `preserve`, and the `json` parser Prettier picks for a `.json` file. No option in the Site's Prettier config, no `overrides` entry that matches those files, and no `.editorconfig` section that does (`indent_style`, `indent_size`, `tab_width`, `max_line_length`, `end_of_line`, which Prettier reads too) may set them otherwise.
 - **Prettier 3.x, at the minor the tables come from**: 3.9 today, `prettierVersion` in `emoji.go`. Another minor can measure a line differently, as when it updates its emoji.
 
+The Site's build checks both: `@edity/astro`'s page loader fails when the Site's Prettier is another minor than `serverPrettier` in its `src/prettier.ts`, or would format a page's content file with other values of those options. The two repositories are coupled there, so a change to what this server writes moves that check with it.
+
 When the Sites move to another Prettier:
 
 1. In an edity checkout whose `package.json` takes that Prettier, run `mise run deps`.
 2. Run `mise run generate:emoji <edity>`. It fails if that Prettier's `getStringWidth` is no longer the function `internal/content/width.go` ports, which then has to be ported again.
 3. Run `mise run record:prettier <edity>`, which records what that Prettier makes of the content tests' files, texts and numbers, and then `mise run test`, which checks `internal/content` against all of them.
+4. In edity, set `serverPrettier` in `packages/astro/src/prettier.ts` to the new minor, so that the Sites' builds take that Prettier, and only it, once this server is released.
 
 ## Publish progress
 
