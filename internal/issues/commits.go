@@ -11,8 +11,8 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
-// developerCommits is the issue that tells the Developer of the commits on
-// main that are not content, and that a Publish ships (V7).
+// developerCommits is the issue that reports to the Developer the commits
+// on main that are not content, and that a Publish ships (V7).
 var developerCommits = topic{
 	marker: "<!-- edity:developer-commits -->",
 	title:  "Edity: a Publish shipped commits that are not content",
@@ -30,7 +30,7 @@ const (
 	maxCommits = 10
 	// maxFiles is the most files GitHub lists for a comparison.
 	maxFiles = 300
-	// shownFiles is how many files a note names for a commit.
+	// shownFiles is how many files a report names for a commit.
 	shownFiles = 10
 )
 
@@ -71,12 +71,12 @@ type file struct {
 	Patch string `json:"patch"`
 }
 
-// NoteDeveloperCommits notes on an issue the commits that the Publish p
+// ReportDeveloperCommits reports on an issue the commits that the Publish p
 // ships and that change more than content (V7): those on main since the
 // last Release that the App did not author, which change files outside
 // src/content/, or more of package.json than its version. Until the next
-// Release every Publish ships them, so each is noted once.
-func (r *Reporter) NoteDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error {
+// Release every Publish ships them, so each is reported once.
+func (r *Reporter) ReportDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error {
 	repo := r.repository(s.Repository)
 	bot, err := r.bot(ctx)
 	if err != nil {
@@ -101,30 +101,30 @@ func (r *Reporter) NoteDeveloperCommits(ctx context.Context, s site.Site, p publ
 			theirs = append(theirs, c.SHA)
 		}
 	}
-	return r.tell(ctx, s, developerCommits, theirs, func(untold []string) (writeup, error) {
+	return r.report(ctx, s, developerCommits, theirs, func(untold []string) (writeup, error) {
 		// The comparison's files are those of every commit together, so each
 		// commit is read alone.
 		untold = untold[:min(len(untold), maxCommits)]
-		var notes []string
+		var lines []string
 		for _, sha := range untold {
 			var c commit
 			if err := repo.Get(ctx, "commits/"+sha, &c); err != nil {
 				return writeup{}, err
 			}
 			if files := notContent(c.Files); len(files) > 0 {
-				notes = append(notes, commitNote(c, files))
+				lines = append(lines, commitLine(c, files))
 			}
 		}
-		if len(notes) == 0 {
+		if len(lines) == 0 {
 			return writeup{keys: untold}, nil
 		}
-		text := fmt.Sprintf("The Publish of v%s, %s, ships these commits:\n\n%s", p.Version, p.SHA, strings.Join(notes, "\n"))
+		text := fmt.Sprintf("The Publish of v%s, %s, ships these commits:\n\n%s", p.Version, p.SHA, strings.Join(lines, "\n"))
 		return writeup{text: text, keys: untold}, nil
 	})
 }
 
-// commitNote is the line that notes c, which changes files.
-func commitNote(c commit, files []string) string {
+// commitLine is the line that reports c, which changes files.
+func commitLine(c commit, files []string) string {
 	headline, _, _ := strings.Cut(c.Commit.Message, "\n")
 	shown := files[:min(len(files), shownFiles)]
 	more := ""

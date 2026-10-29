@@ -17,7 +17,7 @@
 //
 // The Editor tells the Client of a failed Publish that the Developer has
 // been notified (P5), so a Tracker answers failed only once its Reporter
-// has told the Developer (V6).
+// has reported the failure to the Developer (V6).
 //
 // Deploying and live are ticket 33's.
 package progress
@@ -63,7 +63,7 @@ type Progress struct {
 // commit of its repository, or one that the publisher App did not author.
 var ErrNotPublish = errors.New("not the commit of a Publish")
 
-// A Failure is a Publish that failed, as the Developer is told of it.
+// A Failure is a Publish that failed, as it is reported to the Developer.
 type Failure struct {
 	// SHA is the Publish's commit, Message its commit message, and Version
 	// the version of the Release it was to become.
@@ -73,15 +73,15 @@ type Failure struct {
 	// says what failed.
 	Run, Reason string
 	// ID tells this failure from every other on the Site, so that it is
-	// told once: the run that failed and its attempt, or the deadline the
+	// reported once: the run that failed and its attempt, or the deadline the
 	// commit missed. It has no spaces.
 	ID string
 }
 
-// A Reporter tells the Developer that a Publish failed (V6).
+// A Reporter reports to the Developer that a Publish failed (V6).
 // *issues.Reporter is one.
 type Reporter interface {
-	// ReportFailure returns nil once the Developer has been told of f,
+	// ReportFailure returns nil once f has been reported to the Developer,
 	// whether now or earlier.
 	ReportFailure(ctx context.Context, s site.Site, f Failure) error
 }
@@ -145,8 +145,8 @@ type look struct {
 // New returns a Tracker that reaches a Site's repository through
 // repository, and tells a Publish's commit by its author, the login bot
 // returns: the publisher App's. It answers that a Publish failed only once
-// reporter has told the Developer (P5). A nil reporter tells no one, for
-// what only reads, such as mise run check:progress.
+// reporter has reported it to the Developer (P5). A nil reporter reports
+// nothing, for what only reads, such as mise run check:progress.
 func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
 	return &Tracker{
 		repository: func(r site.Repository) Repository { return repository(r) },
@@ -198,7 +198,7 @@ func (t *Tracker) look(ctx context.Context, s site.Site, sha string, k key, l *l
 		// The Editor tells the Client that the Developer has been notified,
 		// so that has to be true before the answer is.
 		if err = t.reporter.ReportFailure(ctx, s, *failure); err != nil {
-			p, err = Progress{}, fmt.Errorf("telling the Developer that %s failed: %w", sha, err)
+			p, err = Progress{}, fmt.Errorf("reporting that %s failed: %w", sha, err)
 		}
 	}
 	t.mu.Lock()
@@ -212,7 +212,7 @@ func (t *Tracker) look(ctx context.Context, s site.Site, sha string, k key, l *l
 }
 
 // workOut asks GitHub where the commit sha is, and, when the Publish
-// failed, what the Developer is to be told.
+// failed, what to report to the Developer.
 func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progress, *Failure, error) {
 	repo := t.repository(s.Repository)
 	bot, err := t.bot(ctx)

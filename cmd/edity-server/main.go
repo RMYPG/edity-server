@@ -46,7 +46,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		// No Client can log in before ticket 25, so every Publish gets 401.
 		Sessions:  server.NoSessions{},
 		Publisher: publish.New(repository),
-		Notifier:  reporter,
+		Reporter:  reporter,
 		Tracker:   progress.New(repository, publisher.BotLogin, reporter),
 	}
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)

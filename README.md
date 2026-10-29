@@ -89,10 +89,10 @@ The App's rate limit is the installation's, 5,000 calls an hour shared by every 
 
 ## Issues on the Site repository
 
-The App opens GitHub issues on the Site repository to tell the Developer what they need to know, and stores nothing else.
+The App opens GitHub issues on the Site repository to report to the Developer what they need to know, and stores nothing else.
 
 - **A Publish that failed** (V6). The Editor tells the Client that their changes are saved, are not live yet, and that the Developer has been notified (P5), so the server answers `failed` only once an issue says what failed, for which Publish (its commit, version, page, the Fields and Lists it changed and the Client), with a link to the run. Until it is written, the progress answers 503, or 500 when GitHub refuses it, such as when the repository's Issues are turned off.
-- **Commits that are not content** (V7). A Publish ships everything on `main` since the last Release. Once a Publish is answered, the server compares the highest `vX.Y.Z` tag with its commit, and notes each commit the App did not make that changes files outside `src/content/`, or more of `package.json` than its version. It never delays or fails the Publish: a failure to note them is logged, and the next Publish before the next Release notes them.
+- **Commits that are not content** (V7). A Publish ships everything on `main` since the last Release. Once a Publish is answered, the server compares the highest `vX.Y.Z` tag with its commit, and reports each commit the App did not make that changes files outside `src/content/`, or more of `package.json` than its version. It never delays or fails the Publish: a failure to report them is logged, and the next Publish before the next Release reports them.
 
 Each kind has one open issue at a time, which the App opened and which a hidden marker in its body names. Every failure, and every Publish that ships more such commits, is a comment on it. The body lists, in another hidden marker, what the issue told: a failed run by its ID and attempt, so a run run again that fails again is told again, or a missed deadline by the commit. A failure polled again, or by a server that restarted, is not told twice. One call finds the issues, the App's 30 updated last, closed ones too, and it costs nothing while they stay the same. Once the Developer closes the issue, what it told is not told again, and the next news opens a new issue.
 
