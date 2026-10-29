@@ -487,11 +487,67 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "no CI run 10 minutes after the commit"},
 			failure: "no-ci:" + first,
 		},
-		"failed: no Release half an hour after CI passed": {
+		"failed: no Release half an hour after CI passed, its Release on Publish run skipped": {
 			sha: first, now: at("19:22:14"),
-			edit:    func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.0") },
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.0")
+				// As when EDITY_PUBLISHER_LOGINS does not name the App.
+				releaseRunsUntil(t, a, func(run map[string]any) {
+					run["display_title"], run["conclusion"] = "Release "+first, "skipped"
+				})
+			},
 			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "no Release 30 minutes after CI passed"},
 			failure: "no-release:" + first + "@2026-10-29T18:50:04Z",
+		},
+		"failed: no Release half an hour after CI passed, and no Release on Publish run of it": {
+			sha: first, now: at("19:22:14"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.0")
+				// The second Publish's run named, and none of the first's,
+				// as when the workflow was disabled in between.
+				editRuns(t, a, releaseRuns, func(run map[string]any) bool {
+					if run["head_sha"] == second {
+						run["display_title"] = "Release " + second
+					}
+					return run["head_sha"] != first
+				})
+			},
+			want:    Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "no Release 30 minutes after CI passed"},
+			failure: "no-release:" + first + "@2026-10-29T18:50:04Z",
+		},
+		"releasing: half an hour after CI passed, on a Site whose Release on Publish runs are not named after their commits": {
+			sha: first, now: at("19:22:14"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.0") },
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
+		},
+		"releasing: half an hour after CI passed, its run cancelled while a newer Release on Publish run is under way": {
+			sha: first, now: at("19:22:14"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.0")
+				editRuns(t, a, releaseRuns, func(run map[string]any) bool {
+					switch run["head_sha"] {
+					case first:
+						run["display_title"], run["conclusion"] = "Release "+first, "cancelled"
+					case second:
+						run["display_title"] = "Release " + second
+						inProgress(run, "2026-10-29T19:22:00Z")
+					}
+					return true
+				})
+			},
+			want: Progress{Stage: Releasing, Version: release.Version{1, 0, 1}},
+		},
+		"validating: its CI run queued half an hour after the commit": {
+			sha: first, now: at("19:22:14"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.0")
+				editRuns(t, a, ciRuns(first), func(run map[string]any) bool {
+					inProgress(run, "2026-10-29T18:50:04Z")
+					run["status"] = "queued"
+					return true
+				})
+			},
+			want: Progress{Stage: Validating, Version: release.Version{1, 0, 1}},
 		},
 		"releasing: half an hour after CI passed, its Release on Publish run waiting its turn": {
 			sha: first, now: at("19:22:14"),

@@ -691,8 +691,10 @@ components:
             - `failed`: a CI run on the commit failed, or the Release on
               Publish run that cuts its Release did, or nothing came of it in
               time: no CI run 10 minutes after the commit, or no Release 30
-              minutes after CI passed while no Release run of it is under
-              way. The changes are saved but not live, and the Developer has
+              minutes after CI passed while no Release on Publish run is
+              under way, on a Site whose Release on Publish runs are named
+              after their commits. A CI run that waits for a runner keeps the
+              commit `validating`. The changes are saved but not live, and the Developer has
               been told: an issue on the Site repository says what failed and
               links to the run (P5, V6). The server answers `failed` only once
               that issue is written, and 503 until then. It is not the end: a

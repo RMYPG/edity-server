@@ -13,7 +13,15 @@
 //   - released once the highest vX.Y.Z tag contains it, whether that is the
 //     commit's own Release or a newer one (P8);
 //   - failed when one of its CI runs or its Release on Publish run failed,
-//     or when nothing came of it in time.
+//     or when nothing came of it in time: no CI run some minutes after the
+//     commit, or, on a Site whose Release on Publish runs are named after
+//     their commits, no Release some time after CI passed while none of
+//     those runs is under way. A Site whose runs are not named yet releases
+//     the commit by its tag alone, with no deadline: no run there tells
+//     whether this commit's Release is still to come. A CI run that GitHub
+//     keeps queued leaves the commit validating, with no deadline either:
+//     it starts once a runner is free, or the Developer cancels it, which
+//     fails the Publish.
 //
 // The Editor tells the Client of a failed Publish that the Developer has
 // been notified (P5), so a Tracker answers failed only once its Reporter
@@ -105,8 +113,10 @@ const (
 	// workflow is disabled.
 	ciDeadline = 10 * time.Minute
 	// releaseDeadline is how long after CI passed a Publish waits for a
-	// Release to contain it, while no Release on Publish run of it is under
-	// way: one that was skipped, cancelled or never named after the commit.
+	// Release to contain it, on a Site whose Release on Publish runs are
+	// named after their commits, while none of them is under way: its own
+	// was skipped or cancelled, or never started. Any run under way may
+	// still release it, as a newer Release.
 	releaseDeadline = 30 * time.Minute
 	// lookTimeout bounds one look at GitHub.
 	lookTimeout = 20 * time.Second
@@ -293,7 +303,7 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 		}
 		break
 	}
-	if now.Sub(ci.lastUpdated()) > releaseDeadline {
+	if releases.named() && !releases.underWay() && now.Sub(ci.lastUpdated()) > releaseDeadline {
 		// By when CI last started: CI run again, passing again with still no
 		// Release after it, is another failure.
 		return failed("", fmt.Sprintf("no Release %d minutes after CI passed", int(releaseDeadline.Minutes())),
@@ -409,6 +419,20 @@ func (rs runs) failed() *run {
 	return nil
 }
 
+// named tells whether the Site's Release on Publish workflow names its runs
+// after the commits they release, "Release <sha>", as the Site template's
+// does since RMYPG/static-astro-site-template#15: one of the runs is.
+func (rs runs) named() bool {
+	for _, r := range rs.Runs {
+		if sha, ok := strings.CutPrefix(r.DisplayTitle, "Release "); ok && github.IsSHA(sha) {
+			return true
+		}
+	}
+	return false
+}
+
+// underWay tells whether any of the runs has yet to complete: it is queued,
+// waiting or in progress.
 func (rs runs) underWay() bool {
 	for _, r := range rs.Runs {
 		if r.Status != "completed" {
