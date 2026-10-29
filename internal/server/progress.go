@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -74,15 +73,5 @@ func (h *progressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // fail answers a request whose progress GitHub did not tell.
 func (h *progressHandler) fail(w http.ResponseWriter, r *http.Request, s site.Site, err error) {
 	h.logger.LogAttrs(r.Context(), slog.LevelError, "progress failed", slog.String("site", s.ID), slog.String("error", err.Error()))
-	var limited *github.Error
-	switch {
-	case errors.As(err, &limited) && limited.RetryAfter > 0:
-		w.Header().Set("Retry-After", seconds(limited.RetryAfter))
-		http.Error(w, "GitHub is limiting the server's requests: ask again later.", http.StatusServiceUnavailable)
-	case errors.Is(err, github.ErrNotInstalled), errors.As(err, &limited) && limited.Status < 500:
-		// The App is not installed, or lacks a permission.
-		http.Error(w, "GitHub refused the publisher App: the Developer has to fix it.", http.StatusInternalServerError)
-	default:
-		http.Error(w, "GitHub could not be reached: ask again later.", http.StatusServiceUnavailable)
-	}
+	failedOnGitHub(w, err, "ask again")
 }

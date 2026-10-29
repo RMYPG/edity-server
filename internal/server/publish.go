@@ -157,7 +157,6 @@ func (h *publishHandler) fail(w http.ResponseWriter, r *http.Request, s site.Sit
 		inConflict *publish.ConflictsError
 		violations *publish.ViolationsError
 		broken     *publish.BrokenError
-		limited    *github.Error
 	)
 	switch {
 	case errors.As(err, &inConflict):
@@ -180,14 +179,8 @@ func (h *publishHandler) fail(w http.ResponseWriter, r *http.Request, s site.Sit
 	case errors.Is(err, publish.ErrBusy):
 		w.Header().Set("Retry-After", seconds(busyRetry))
 		http.Error(w, "The Site repository's main kept moving: publish again in a moment.", http.StatusServiceUnavailable)
-	case errors.As(err, &limited) && limited.RetryAfter > 0:
-		w.Header().Set("Retry-After", seconds(limited.RetryAfter))
-		http.Error(w, "GitHub is limiting the server's requests: publish again later.", http.StatusServiceUnavailable)
-	case errors.As(err, &limited) && limited.Status < 500:
-		// GitHub refused the App: its permissions or installation are wrong.
-		http.Error(w, "GitHub refused the publisher App: the Developer has to fix it.", http.StatusInternalServerError)
 	default:
-		http.Error(w, "GitHub could not be reached: publish again later.", http.StatusServiceUnavailable)
+		failedOnGitHub(w, err, "publish again")
 	}
 }
 

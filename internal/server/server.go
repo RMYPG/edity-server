@@ -2,10 +2,12 @@
 package server
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -76,6 +78,24 @@ func health(w http.ResponseWriter, _ *http.Request) {
 // notImplemented answers the routes of the spec that are not built yet.
 func notImplemented(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+}
+
+// failedOnGitHub answers a request that GitHub failed: 503 with GitHub's
+// wait in Retry-After when it limits the App's requests, 500 when it refuses
+// the App, which the Developer has to fix, and 503 when it could not be
+// reached. again is what the Client does later, such as "publish again".
+func failedOnGitHub(w http.ResponseWriter, err error, again string) {
+	var refused *github.Error
+	switch {
+	case errors.As(err, &refused) && refused.RetryAfter > 0:
+		w.Header().Set("Retry-After", seconds(refused.RetryAfter))
+		http.Error(w, "GitHub is limiting the server's requests: "+again+" later.", http.StatusServiceUnavailable)
+	case errors.Is(err, github.ErrNotInstalled), errors.As(err, &refused) && refused.Status < 500:
+		// The App is not installed, or lacks a permission.
+		http.Error(w, "GitHub refused the publisher App: the Developer has to fix it.", http.StatusInternalServerError)
+	default:
+		http.Error(w, "GitHub could not be reached: "+again+" later.", http.StatusServiceUnavailable)
+	}
 }
 
 // logRequests writes one line per request. It leaves out the query string,
