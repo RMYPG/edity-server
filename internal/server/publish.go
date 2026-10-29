@@ -46,6 +46,12 @@ type Publisher interface {
 	Publish(ctx context.Context, s site.Site, d publish.Draft, client publish.Client) (publish.Published, error)
 }
 
+// A Notifier tells the Developer of the commits a Publish ships that are
+// not content (V7). *issues.Reporter is one.
+type Notifier interface {
+	NoteDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error
+}
+
 // maxPublishBody bounds a Publish's body. A whole page's content is a few
 // kilobytes, and a Draft holds at most every value in it twice.
 const maxPublishBody = 1 << 20
@@ -59,11 +65,17 @@ const publishTimeout = 50 * time.Second
 // moving under a Publish.
 const busyRetry = 10 * time.Second
 
+// noteTimeout bounds noting what a Publish shipped, which runs once the
+// Publish is answered.
+const noteTimeout = time.Minute
+
 type publishHandler struct {
 	sessions  Sessions
 	publisher Publisher
-	limit     *limiter
-	logger    *slog.Logger
+	// notifier is nil when nothing notes what a Publish ships.
+	notifier Notifier
+	limit    *limiter
+	logger   *slog.Logger
 }
 
 // ServeHTTP answers POST /_edity/api/publish.
@@ -123,6 +135,20 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Conflicts []conflict `json:"conflicts,omitempty"`
 	}{published.SHA, published.Version, conflicts(published.Conflicts)}
 	writeJSON(w, http.StatusAccepted, answer)
+	if h.notifier != nil {
+		// Apart from the Publish, which it neither delays nor fails.
+		go h.note(context.WithoutCancel(r.Context()), s, published)
+	}
+}
+
+// note notes the Developer commits that published ships, if any.
+func (h *publishHandler) note(ctx context.Context, s site.Site, published publish.Published) {
+	ctx, cancel := context.WithTimeout(ctx, noteTimeout)
+	defer cancel()
+	if err := h.notifier.NoteDeveloperCommits(ctx, s, published); err != nil {
+		h.logger.LogAttrs(ctx, slog.LevelWarn, "Developer commits not noted",
+			slog.String("site", s.ID), slog.String("sha", published.SHA), slog.String("error", err.Error()))
+	}
 }
 
 // fail answers a Publish that committed nothing.

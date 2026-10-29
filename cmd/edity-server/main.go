@@ -13,6 +13,7 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/config"
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/issues"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/publish"
 	"github.com/RMYPG/edity-server/internal/server"
@@ -39,15 +40,19 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 
 	publisher := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 20 * time.Second})
+	reporter := issues.New(func(r site.Repository) issues.Repository {
+		return publisher.Repo(r.Owner, r.Name)
+	}, publisher.BotLogin, logger)
 	services := server.Services{
 		// No Client can log in before ticket 25, so every Publish gets 401.
 		Sessions: server.NoSessions{},
 		Publisher: publish.New(func(r site.Repository) publish.Repository {
 			return publisher.Repo(r.Owner, r.Name)
 		}),
+		Notifier: reporter,
 		Tracker: progress.New(func(r site.Repository) progress.Repository {
 			return publisher.Repo(r.Owner, r.Name)
-		}, publisher.BotLogin),
+		}, publisher.BotLogin, reporter),
 	}
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)
 	served := make(chan error, 1)

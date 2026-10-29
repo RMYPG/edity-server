@@ -3,6 +3,7 @@ package progress
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,10 +221,39 @@ func newFake(t *testing.T) (*fakeGitHub, *Tracker) {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	app := github.NewApp(5466528, testKey(), srv.URL, srv.Client())
-	tracker := New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin)
+	tracker := New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, nil)
 	tracker.now = f.clock
 	return f, tracker
 }
+
+// fakeReporter records the Failures it is told of, and answers err.
+type fakeReporter struct {
+	mu   sync.Mutex
+	told []Failure
+	err  error
+}
+
+func (r *fakeReporter) ReportFailure(ctx context.Context, s site.Site, f Failure) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s.ID != sandbox.ID {
+		return fmt.Errorf("told of a Failure on %s", s.ID)
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("no deadline")
+	}
+	r.told = append(r.told, f)
+	return r.err
+}
+
+func (r *fakeReporter) failures() []Failure {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.told)
+}
+
+// firstMessage is the first Publish's commit message.
+const firstMessage = "content: publish home\n\nChanged:\n- hero.cta\n\nEdity-Client: Edity end-to-end check"
 
 var testKey = sync.OnceValue(func() *rsa.PrivateKey {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -364,6 +395,9 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		now  time.Time
 		edit func(t *testing.T, a map[string]response)
 		want Progress
+		// failure is the ID of the Failure the Developer is told of, when
+		// the Publish failed.
+		failure string
 	}{
 		"validating: pushed, before GitHub lists its CI run": {
 			sha: first, now: at("18:50:02"),
@@ -486,7 +520,20 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
 			},
-			want: Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
+			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
+			failure: "run:40934506192/1",
+		},
+		"failed: CI, run again and failed again": {
+			sha: first, now: at("18:56:00"),
+			edit: func(t *testing.T, a map[string]response) {
+				tagsUpTo(t, a, "v1.0.0")
+				editRuns(t, a, ciRuns(first), func(run map[string]any) bool {
+					run["conclusion"], run["run_attempt"], run["run_started_at"] = "failure", 2, "2026-10-29T18:53:00Z"
+					return true
+				})
+			},
+			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192", Reason: "CI ended failure"},
+			failure: "run:40934506192/2",
 		},
 		"failed: its Release on Publish run": {
 			sha: first, now: at("18:53:00"),
@@ -496,7 +543,8 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 					run["display_title"], run["conclusion"] = "Release "+first, "failure"
 				})
 			},
-			want: Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934846962", Reason: "Release on Publish ended failure"},
+			want:    Progress{Stage: Failed, Version: "1.0.1", Run: "https://github.com/RMYPG/edity-sandbox/actions/runs/40934846962", Reason: "Release on Publish ended failure"},
+			failure: "run:40934846962/1",
 		},
 		"failed: no CI run ten minutes after the commit": {
 			sha: first, now: at("19:00:02"),
@@ -504,12 +552,14 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(map[string]any) bool { return false })
 			},
-			want: Progress{Stage: Failed, Version: "1.0.1", Reason: "no CI run 10 minutes after the commit"},
+			want:    Progress{Stage: Failed, Version: "1.0.1", Reason: "no CI run 10 minutes after the commit"},
+			failure: "no-ci:" + first,
 		},
 		"failed: no Release half an hour after CI passed": {
 			sha: first, now: at("19:22:14"),
-			edit: func(t *testing.T, a map[string]response) { tagsUpTo(t, a, "v1.0.0") },
-			want: Progress{Stage: Failed, Version: "1.0.1", Reason: "no Release 30 minutes after CI passed"},
+			edit:    func(t *testing.T, a map[string]response) { tagsUpTo(t, a, "v1.0.0") },
+			want:    Progress{Stage: Failed, Version: "1.0.1", Reason: "no Release 30 minutes after CI passed"},
+			failure: "no-release:" + first + "@2026-10-29T18:50:04Z",
 		},
 		"releasing: half an hour after CI passed, its Release on Publish run waiting its turn": {
 			sha: first, now: at("19:22:14"),
@@ -526,6 +576,8 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, tracker := newFake(t)
+			reporter := &fakeReporter{}
+			tracker.reporter = reporter
 			a := answers(t)
 			if c.edit != nil {
 				c.edit(t, a)
@@ -535,7 +587,64 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 			if err != nil || got != c.want {
 				t.Errorf("Progress = %+v, %v, want %+v", got, err, c.want)
 			}
+			var want []Failure
+			if c.failure != "" {
+				want = []Failure{{SHA: c.sha, Message: firstMessage, Version: c.want.Version, Run: c.want.Run, Reason: c.want.Reason, ID: c.failure}}
+			}
+			if told := reporter.failures(); !slices.Equal(told, want) {
+				t.Errorf("the Developer was told of %+v, want %+v", told, want)
+			}
 		})
+	}
+}
+
+// ciFailed is GitHub's answers once the first Publish's CI failed.
+func ciFailed(t *testing.T) map[string]response {
+	t.Helper()
+	a := answers(t)
+	tagsUpTo(t, a, "v1.0.0")
+	editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
+	return a
+}
+
+func TestAFailureTheDeveloperWasNotToldOfIsNotAnswered(t *testing.T) {
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{err: &github.Error{Call: "POST /repos/RMYPG/edity-sandbox/issues", Status: http.StatusBadGateway, Message: "Server Error"}}
+	tracker.reporter = reporter
+	f.set(at("18:52:20"), ciFailed(t))
+	var gerr *github.Error
+	if p, err := tracker.Progress(t.Context(), sandbox, first); !errors.As(err, &gerr) || gerr.Status != http.StatusBadGateway {
+		t.Fatalf("Progress = %+v, %v, want GitHub's 502 from telling the Developer", p, err)
+	}
+
+	// The next request tells the Developer again, however soon it comes.
+	reporter.mu.Lock()
+	reporter.err = nil
+	reporter.mu.Unlock()
+	if p, err := tracker.Progress(t.Context(), sandbox, first); err != nil || p.Stage != Failed {
+		t.Fatalf("Progress once the Developer is told = %+v, %v, want failed", p, err)
+	}
+	if told := reporter.failures(); len(told) != 2 || told[0] != told[1] {
+		t.Errorf("the Developer was told %+v, want the same Failure twice", told)
+	}
+}
+
+func TestRequestsForOneFailedCommitTellTheDeveloperOnce(t *testing.T) {
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.set(at("18:52:20"), ciFailed(t))
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() {
+			if p, err := tracker.Progress(t.Context(), sandbox, first); err != nil || p.Stage != Failed {
+				t.Errorf("Progress = %+v, %v", p, err)
+			}
+		})
+	}
+	wg.Wait()
+	if told := reporter.failures(); len(told) != 1 {
+		t.Errorf("three requests at once told the Developer %d times, want once", len(told))
 	}
 }
 
@@ -603,9 +712,7 @@ func TestRequestsForOneCommitShareALook(t *testing.T) {
 // (TestRequestsForOneCommitShareALook), so more tabs cost nothing more.
 func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 	moments := firstPublish(t)
-	failed := answers(t)
-	tagsUpTo(t, failed, "v1.0.0")
-	editRuns(t, failed, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
+	failed := ciFailed(t)
 
 	for _, c := range []struct {
 		name  string
@@ -673,5 +780,19 @@ func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 	}
 	if len(f.tokens) != 2 {
 		t.Errorf("%d tokens in the hour, want the token replaced once", len(f.tokens))
+	}
+}
+
+func TestLastReleaseIsTheHighestTag(t *testing.T) {
+	f, tracker := newFake(t)
+	repo := tracker.repository(sandbox.Repository)
+	if last, err := LastRelease(t.Context(), repo); err != nil || last != "v1.0.2" {
+		t.Errorf("LastRelease = %q, %v, want v1.0.2", last, err)
+	}
+	a := answers(t)
+	delete(a, "git/matching-refs/tags/v")
+	f.set(at("18:50:01"), a)
+	if last, err := LastRelease(t.Context(), repo); err != nil || last != "" {
+		t.Errorf("LastRelease with no tags = %q, %v, want none", last, err)
 	}
 }

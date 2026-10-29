@@ -50,6 +50,12 @@ type fakeGitHub struct {
 	reads, notModified int
 	// apps counts the calls to GET /app.
 	apps int
+	// writes are the POSTs and PATCHes on issues made with a token, and
+	// lastWrite the body of the last; issuesOff turns the repository's
+	// Issues off.
+	writes    []string
+	lastWrite map[string]any
+	issuesOff bool
 }
 
 func newFake(t *testing.T) (*fakeGitHub, *App) {
@@ -153,6 +159,22 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			"committer": map[string]any{"name": "GitHub", "email": "noreply@github.com", "date": "2026-10-29T11:59:00Z"},
 			"parents":   []map[string]any{{"sha": "1111000000000000000000000000000000000000"}},
 		})
+	case (r.Method == http.MethodPost || r.Method == http.MethodPatch) && strings.HasPrefix(r.URL.Path, "/repos/RMYPG/edity-sandbox/issues"):
+		if r.Header.Get("Content-Type") != "application/json" {
+			f.t.Errorf("%s %s sent as %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+		}
+		if f.issuesOff {
+			writeJSON(w, http.StatusGone, map[string]any{"message": "Issues are disabled for this repo"})
+			return
+		}
+		f.writes = append(f.writes, r.Method+" "+r.URL.Path)
+		f.lastWrite = nil
+		_ = json.NewDecoder(r.Body).Decode(&f.lastWrite)
+		status := http.StatusOK
+		if r.Method == http.MethodPost {
+			status = http.StatusCreated
+		}
+		writeJSON(w, status, map[string]any{"number": 7, "html_url": "https://github.com/RMYPG/edity-sandbox/issues/7"})
 	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
 		var body struct {
 			Query     string `json:"query"`
@@ -441,5 +463,44 @@ func TestGitCommit(t *testing.T) {
 	}
 	if _, err := app.Repo("RMYPG", "edity-sandbox").GitCommit(context.Background(), "2222000000000000000000000000000000000000"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GitCommit of no commit: %v, want ErrNotFound", err)
+	}
+}
+
+func TestPostAndPatchSendJSONWithAnInstallationToken(t *testing.T) {
+	f, app := newFake(t)
+	repo := app.Repo("RMYPG", "edity-sandbox")
+	var created struct {
+		Number int `json:"number"`
+	}
+	if err := repo.Post(t.Context(), "issues", map[string]any{"title": "A title", "body": "A body"}, &created); err != nil || created.Number != 7 {
+		t.Fatalf("Post = %+v, %v", created, err)
+	}
+	if err := repo.Patch(t.Context(), "issues/7", map[string]any{"body": "Another body"}, nil); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if got := fmt.Sprint(f.writes); got != "[POST /repos/RMYPG/edity-sandbox/issues PATCH /repos/RMYPG/edity-sandbox/issues/7]" {
+		t.Errorf("writes %s", got)
+	}
+	if fmt.Sprint(f.lastWrite) != "map[body:Another body]" {
+		t.Errorf("the PATCH sent %v", f.lastWrite)
+	}
+
+	// A token GitHub no longer takes is replaced, and the write made once.
+	f.mu.Lock()
+	f.refused[f.tokens[0]] = true
+	f.mu.Unlock()
+	if err := repo.Post(t.Context(), "issues/7/comments", map[string]any{"body": "A comment"}, nil); err != nil {
+		t.Fatalf("Post after the token was revoked: %v", err)
+	}
+	if len(f.tokens) != 2 || len(f.writes) != 3 {
+		t.Errorf("%d tokens and %d writes, want a new token and the comment written once", len(f.tokens), len(f.writes))
+	}
+
+	f.mu.Lock()
+	f.issuesOff = true
+	f.mu.Unlock()
+	var gerr *Error
+	if err := repo.Post(t.Context(), "issues", map[string]any{"title": "A title"}, nil); !errors.As(err, &gerr) || gerr.Status != http.StatusGone {
+		t.Errorf("Post with Issues turned off: %v, want GitHub's 410", err)
 	}
 }

@@ -151,6 +151,20 @@ func TestWhatTheProgressAnswersWhenGitHubDoesNotTell(t *testing.T) {
 		"GitHub down":     {err: &github.Error{Call: "GET /x", Status: 502}, status: http.StatusServiceUnavailable},
 		"no network":      {err: errors.New("dial tcp: i/o timeout"), status: http.StatusServiceUnavailable},
 		"too slow":        {err: context.DeadlineExceeded, status: http.StatusServiceUnavailable},
+		// A failed Publish whose issue is not written yet is not answered
+		// failed (P5).
+		"the failure issue not written": {
+			err:    fmt.Errorf("telling the Developer that %s failed: %w", commit, &github.Error{Call: "POST /repos/RMYPG/edity-sandbox/issues", Status: 502}),
+			status: http.StatusServiceUnavailable,
+		},
+		"the failure issue limited": {
+			err:    fmt.Errorf("telling the Developer that %s failed: %w", commit, &github.Error{Call: "POST /repos/RMYPG/edity-sandbox/issues", Status: 403, RetryAfter: time.Minute}),
+			status: http.StatusServiceUnavailable, retryAfter: "60",
+		},
+		"Issues turned off": {
+			err:    fmt.Errorf("telling the Developer that %s failed: %w", commit, &github.Error{Call: "POST /repos/RMYPG/edity-sandbox/issues", Status: 410, Message: "Issues are disabled for this repo"}),
+			status: http.StatusInternalServerError,
+		},
 	} {
 		rec := get(t, progressServer(t, cookieSessions{}, &fakeTracker{err: c.err}), commit, nil)
 		if rec.Code != c.status || rec.Header().Get("Retry-After") != c.retryAfter {
