@@ -45,6 +45,11 @@ type fakeGitHub struct {
 	// mutation answers createCommitOnBranch instead of the fake, when set.
 	mutation   func(w http.ResponseWriter, input map[string]any)
 	lastCommit map[string]any
+	// reads counts the GETs made with a token, and notModified those of
+	// them answered 304.
+	reads, notModified int
+	// apps counts the calls to GET /app.
+	apps int
 }
 
 func newFake(t *testing.T) (*fakeGitHub, *App) {
@@ -67,9 +72,38 @@ func newFake(t *testing.T) (*fakeGitHub, *App) {
 	return f, app
 }
 
+// ServeHTTP gives each answer to a GET made with a token an ETag, as GitHub
+// does, and answers 304 when the call's If-None-Match is still the answer's.
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/repos/") || strings.HasSuffix(r.URL.Path, "/installation") {
+		f.serve(w, r)
+		return
+	}
+	rec := httptest.NewRecorder()
+	f.serve(rec, r)
+	if rec.Code == http.StatusOK || rec.Code == http.StatusNotFound {
+		f.reads++
+	}
+	if rec.Code == http.StatusOK {
+		etag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(rec.Body.Bytes()))
+		rec.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			f.notModified++
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	for k, v := range rec.Header() {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(rec.Code)
+	_, _ = w.Write(rec.Body.Bytes())
+}
+
+func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("X-GitHub-Api-Version") != apiVersion || r.Header.Get("User-Agent") == "" {
 		f.t.Errorf("%s %s: no API version or User-Agent", r.Method, r.URL.Path)
 	}
@@ -77,6 +111,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/app":
 		f.checkJWT(auth)
+		f.apps++
 		writeJSON(w, http.StatusOK, map[string]any{"id": 5466528, "slug": "edity-publisher"})
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/RMYPG/edity-sandbox/installation":
 		f.checkJWT(auth)
@@ -114,7 +149,9 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/RMYPG/edity-sandbox/git/commits/"+f.head:
 		writeJSON(w, http.StatusOK, map[string]any{
 			"sha": f.head, "message": "content: publish home\n\nEdity-Client: Ana",
-			"parents": []map[string]any{{"sha": "1111000000000000000000000000000000000000"}},
+			"author":    map[string]any{"name": "edity-publisher[bot]", "email": "347795330+edity-publisher[bot]@users.noreply.github.com", "date": "2026-10-29T11:59:00Z"},
+			"committer": map[string]any{"name": "GitHub", "email": "noreply@github.com", "date": "2026-10-29T11:59:00Z"},
+			"parents":   []map[string]any{{"sha": "1111000000000000000000000000000000000000"}},
 		})
 	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
 		var body struct {
@@ -209,6 +246,52 @@ func TestCallsCarryAnInstallationTokenForTheRepositoryAlone(t *testing.T) {
 	}
 }
 
+func TestAGetGitHubSaysStillHoldsReturnsTheAnswerItHad(t *testing.T) {
+	f, app := newFake(t)
+	repo := app.Repo("RMYPG", "edity-sandbox")
+	for range 2 {
+		if head, err := repo.Head(t.Context(), "main"); err != nil || head != f.head {
+			t.Fatalf("Head = %q, %v, want %q", head, err, f.head)
+		}
+		if file, err := repo.File(t.Context(), "src/content/home.json", f.head); err != nil || string(file) != `{"a": 1}` {
+			t.Fatalf("File = %q, %v", file, err)
+		}
+	}
+	if f.reads != 4 || f.notModified != 2 {
+		t.Errorf("%d reads, %d of them 304, want the second Head and File to be 304s", f.reads, f.notModified)
+	}
+
+	// Once main moves, GitHub answers anew.
+	f.mu.Lock()
+	f.head = "cccc000000000000000000000000000000000000"
+	f.mu.Unlock()
+	if head, err := repo.Head(t.Context(), "main"); err != nil || head != f.head {
+		t.Errorf("Head after main moved = %q, %v, want %q", head, err, f.head)
+	}
+	if f.notModified != 2 {
+		t.Errorf("%d reads answered 304, want main's move answered in full", f.notModified)
+	}
+}
+
+func TestTheCacheForgetsTheAnswersUsedLeastRecently(t *testing.T) {
+	c := newCache(10)
+	c.put("a", `"1"`, answer{body: []byte("aaaa")})
+	c.put("b", `"2"`, answer{body: []byte("bbbb")})
+	c.get("a")
+	c.put("c", `"3"`, answer{body: []byte("cccc")})
+	if c.get("b") != nil || c.get("a") == nil || c.get("c") == nil || c.size != 8 {
+		t.Errorf("after a third answer, b is %v and the cache holds %d bytes, want b forgotten and 8", c.get("b"), c.size)
+	}
+	c.put("a", `"4"`, answer{body: []byte("aa")})
+	if got := c.get("a"); got == nil || got.etag != `"4"` || c.size != 6 {
+		t.Errorf("a = %+v, %d bytes, want its new answer in 6", got, c.size)
+	}
+	c.put("huge", `"5"`, answer{body: make([]byte, maxCachedBody+1)})
+	if c.get("huge") != nil {
+		t.Error("the cache kept an answer larger than it keeps")
+	}
+}
+
 func TestATokenIsRenewedFiveMinutesBeforeItExpires(t *testing.T) {
 	f, app := newFake(t)
 	repo := app.Repo("RMYPG", "edity-sandbox")
@@ -251,9 +334,16 @@ func TestARepositoryTheAppIsNotInstalledOn(t *testing.T) {
 }
 
 func TestBotLogin(t *testing.T) {
-	_, app := newFake(t)
-	if login, err := app.BotLogin(t.Context()); err != nil || login != "edity-publisher[bot]" {
-		t.Errorf("BotLogin = %q, %v", login, err)
+	f, app := newFake(t)
+	for range 2 {
+		if login, err := app.BotLogin(t.Context()); err != nil || login != "edity-publisher[bot]" {
+			t.Errorf("BotLogin = %q, %v", login, err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.apps != 1 {
+		t.Errorf("BotLogin asked GitHub %d times, want once", f.apps)
 	}
 }
 
@@ -307,15 +397,19 @@ func TestCreateCommitTellsWhenItCannotTell(t *testing.T) {
 			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"createCommitOnBranch": nil}})
 		},
 	} {
+		f.mu.Lock()
 		f.mutation = answer
+		f.mu.Unlock()
 		if _, err := repo.CreateCommit(t.Context(), commit); !errors.Is(err, ErrUncertain) {
 			t.Errorf("after %s: %v, want ErrUncertain", name, err)
 		}
 	}
 
+	f.mu.Lock()
 	f.mutation = func(w http.ResponseWriter, _ map[string]any) {
 		writeJSON(w, http.StatusOK, map[string]any{"errors": []map[string]any{{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}}})
 	}
+	f.mu.Unlock()
 	var gerr *Error
 	if _, err := repo.CreateCommit(t.Context(), commit); !errors.As(err, &gerr) || errors.Is(err, ErrUncertain) {
 		t.Errorf("after a FORBIDDEN: %v, want an Error", err)
@@ -341,7 +435,11 @@ func TestGitCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.SHA != f.head || c.Message != "content: publish home\n\nEdity-Client: Ana" || len(c.Parents) != 1 || c.Parents[0] != "1111000000000000000000000000000000000000" {
+	if c.SHA != f.head || c.Message != "content: publish home\n\nEdity-Client: Ana" || len(c.Parents) != 1 || c.Parents[0] != "1111000000000000000000000000000000000000" ||
+		c.Author != "edity-publisher[bot]" || !c.Committed.Equal(time.Date(2026, 10, 29, 11, 59, 0, 0, time.UTC)) {
 		t.Errorf("GitCommit = %+v", c)
+	}
+	if _, err := app.Repo("RMYPG", "edity-sandbox").GitCommit(context.Background(), "2222000000000000000000000000000000000000"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GitCommit of no commit: %v, want ErrNotFound", err)
 	}
 }

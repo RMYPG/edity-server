@@ -7,6 +7,12 @@
 // and gets an installation access token for that repository alone, which
 // each call then carries. A token lasts an hour, and is kept until five
 // minutes before it expires.
+//
+// Every call made with a token counts against the installation's rate
+// limit, which every repository it is installed on shares, except a GET
+// that GitHub answers 304 Not Modified. So each GET sends the ETag of
+// GitHub's last answer to it, and returns that answer when GitHub says it
+// still holds.
 package github
 
 import (
@@ -68,9 +74,12 @@ type App struct {
 	api    string
 	client *http.Client
 	now    func() time.Time
+	cache  *cache
 
 	mu    sync.Mutex
 	repos map[string]*installation
+	// bot is the App's bot login, once BotLogin read it.
+	bot string
 }
 
 // installation is the App's installation on one repository, and the token
@@ -91,6 +100,7 @@ func NewApp(id int64, key *rsa.PrivateKey, api string, client *http.Client) *App
 		api:    strings.TrimSuffix(api, "/"),
 		client: client,
 		now:    time.Now,
+		cache:  newCache(cacheBytes),
 		repos:  map[string]*installation{},
 	}
 }
@@ -119,8 +129,14 @@ func (a *App) jwt() (string, error) {
 }
 
 // BotLogin is the login of the App's bot user, which its commits are
-// authored by: its slug with [bot].
+// authored by: its slug with [bot]. It asks GitHub once.
 func (a *App) BotLogin(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	bot := a.bot
+	a.mu.Unlock()
+	if bot != "" {
+		return bot, nil
+	}
 	jwt, err := a.jwt()
 	if err != nil {
 		return "", err
@@ -131,6 +147,12 @@ func (a *App) BotLogin(ctx context.Context) (string, error) {
 	if err := a.call(ctx, http.MethodGet, "/app", jwt, nil, &app); err != nil {
 		return "", err
 	}
+	if app.Slug == "" {
+		return "", errors.New("GitHub answered GET /app with no slug")
+	}
+	a.mu.Lock()
+	a.bot = app.Slug + "[bot]"
+	a.mu.Unlock()
 	return app.Slug + "[bot]", nil
 }
 
@@ -229,8 +251,16 @@ func (r *Repo) path(parts ...string) string {
 }
 
 // do makes a call with an installation token, and once more with a new
-// token if GitHub no longer takes the one it had.
+// token if GitHub no longer takes the one it had. A GET returns the answer
+// the cache kept for it when GitHub says it still holds.
 func (r *Repo) do(ctx context.Context, req request) (answer, error) {
+	var kept *cached
+	if req.method == http.MethodGet {
+		kept = r.app.cache.get(cacheKey(req))
+		if kept != nil {
+			req.etag = kept.etag
+		}
+	}
 	for attempt := 0; ; attempt++ {
 		token, err := r.token(ctx)
 		if err != nil {
@@ -241,6 +271,14 @@ func (r *Repo) do(ctx context.Context, req request) (answer, error) {
 		if err == nil && a.status == http.StatusUnauthorized && attempt == 0 {
 			r.forget(token)
 			continue
+		}
+		if err == nil && req.method == http.MethodGet {
+			switch etag := a.header.Get("ETag"); {
+			case a.status == http.StatusNotModified && kept != nil:
+				return kept.answer, nil
+			case a.status == http.StatusOK && etag != "":
+				r.app.cache.put(cacheKey(req), etag, a)
+			}
 		}
 		return a, err
 	}
@@ -300,13 +338,25 @@ type GitCommit struct {
 	SHA     string
 	Message string
 	Parents []string
+	// Author is the name of the commit's author, which is the App's bot
+	// login on the App's commits.
+	Author string
+	// Committed is when it was committed.
+	Committed time.Time
 }
 
-// GitCommit returns the commit sha.
+// GitCommit returns the commit sha, or ErrNotFound when the repository has
+// no such commit.
 func (r *Repo) GitCommit(ctx context.Context, sha string) (GitCommit, error) {
 	var commit struct {
 		SHA     string `json:"sha"`
 		Message string `json:"message"`
+		Author  struct {
+			Name string `json:"name"`
+		} `json:"author"`
+		Committer struct {
+			Date time.Time `json:"date"`
+		} `json:"committer"`
 		Parents []struct {
 			SHA string `json:"sha"`
 		} `json:"parents"`
@@ -314,7 +364,7 @@ func (r *Repo) GitCommit(ctx context.Context, sha string) (GitCommit, error) {
 	if err := r.get(ctx, "/repos/"+r.path("git/commits", sha), &commit); err != nil {
 		return GitCommit{}, err
 	}
-	c := GitCommit{SHA: commit.SHA, Message: commit.Message}
+	c := GitCommit{SHA: commit.SHA, Message: commit.Message, Author: commit.Author.Name, Committed: commit.Committer.Date}
 	for _, p := range commit.Parents {
 		c.Parents = append(c.Parents, p.SHA)
 	}
@@ -329,6 +379,8 @@ type request struct {
 	auth   string
 	accept string
 	body   any
+	// etag is the ETag of the answer the cache kept, for If-None-Match.
+	etag string
 }
 
 // call makes a call with auth, and decodes its JSON answer into out.
@@ -367,6 +419,9 @@ func (a *App) send(ctx context.Context, r request) (answer, error) {
 		accept = "application/vnd.github+json"
 	}
 	req.Header.Set("Accept", accept)
+	if r.etag != "" {
+		req.Header.Set("If-None-Match", r.etag)
+	}
 	req.Header.Set("Authorization", "Bearer "+r.auth)
 	req.Header.Set("User-Agent", "edity-server")
 	req.Header.Set("X-GitHub-Api-Version", apiVersion)
