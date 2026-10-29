@@ -39,7 +39,8 @@ func TestProgressOnTheSandbox(t *testing.T) {
 	calls := &countingTransport{}
 	app := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 30 * time.Second, Transport: calls})
 	tracker := func() *progress.Tracker {
-		return progress.New(func(r site.Repository) progress.Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin)
+		// It only reads, so it tells no one of a failure.
+		return progress.New(func(r site.Repository) progress.Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, nil)
 	}
 
 	want := map[string]progress.Progress{

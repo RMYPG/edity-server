@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -331,4 +332,88 @@ func TestViolationsAreWrittenAsTheEditorReadsThem(t *testing.T) {
 	if err != nil || string(b) != `{"path":"plans.1.features","limit":"maxItems"}` {
 		t.Errorf("a Violation is %s, %v", b, err)
 	}
+}
+
+// fakeNotifier sends each Publish it is asked to note on noted, and answers
+// err once release is closed.
+type fakeNotifier struct {
+	noted   chan publish.Published
+	release chan struct{}
+	err     error
+}
+
+func (n *fakeNotifier) NoteDeveloperCommits(ctx context.Context, s site.Site, p publish.Published) error {
+	if _, ok := ctx.Deadline(); !ok || s.ID != "edity-sandbox" {
+		return errors.New("no deadline, or another Site")
+	}
+	n.noted <- p
+	<-n.release
+	if ctx.Err() != nil {
+		return errors.New("the note's context ended with the request's")
+	}
+	return n.err
+}
+
+func TestAPublishIsAnsweredBeforeTheDeveloperCommitsItShipsAreNoted(t *testing.T) {
+	sites, err := site.Parse(strings.NewReader(twoSites))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	p := &fakePublisher{err: &publish.ConflictsError{Paths: []string{"hero.title"}}}
+	n := &fakeNotifier{noted: make(chan publish.Published, 2), release: make(chan struct{}), err: errors.New("GitHub could not be reached")}
+	h := apitest.Handler(t, server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)), server.Services{
+		Sessions: cookieSessions{}, Publisher: p, Notifier: n,
+	}))
+
+	// A Publish that commits nothing ships nothing.
+	if rec := post(t, h, draft, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+
+	// A note that has not ended, and then fails, does not hold up or fail
+	// the Publish, even once the browser has gone away.
+	p.mu.Lock()
+	p.err, p.published = nil, publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: "1.0.1"}
+	p.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	rec := post(t, h, draft, func(r *http.Request) { *r = *r.WithContext(ctx) })
+	cancel()
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	select {
+	case noted := <-n.noted:
+		if noted.SHA != p.published.SHA || noted.Version != p.published.Version {
+			t.Errorf("noted %+v, want the Publish %+v", noted, p.published)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Publish's commits were not noted")
+	}
+	close(n.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "Developer commits not noted") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(logs.String(), `"error":"GitHub could not be reached"`) {
+		t.Errorf("the failed note was not logged with its error: %s", logs.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent use.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

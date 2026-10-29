@@ -500,6 +500,31 @@ func TestTheTrailerIsOnOneLine(t *testing.T) {
 	}
 }
 
+func TestParseMessageReadsWhatAPublishWrote(t *testing.T) {
+	m := message("home", []string{"hero.title", "plans.1.price", "services"}, "Ana García")
+	got, ok := ParseMessage(m)
+	if want := (Message{Page: "home", Changed: []string{"hero.title", "plans.1.price", "services"}, Client: "Ana García"}); !ok ||
+		got.Page != want.Page || !slices.Equal(got.Changed, want.Changed) || got.Client != want.Client {
+		t.Errorf("ParseMessage(%q) = %+v, %v, want %+v", m, got, ok, want)
+	}
+	// As GitHub has the sandbox's first Publish, with a newline at the end.
+	if got, ok := ParseMessage("content: publish home\n\nChanged:\n- hero.cta\n\nEdity-Client: Edity end-to-end check\n"); !ok ||
+		got.Page != "home" || !slices.Equal(got.Changed, []string{"hero.cta"}) || got.Client != "Edity end-to-end check" {
+		t.Errorf("ParseMessage of the sandbox's Publish = %+v, %v", got, ok)
+	}
+	for _, other := range []string{
+		"Take @edity/core and @edity/astro 0.1.0 from npm (#3)\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+		"content: publish home",
+		"content: publish ../home\n\nChanged:\n- a\n\nEdity-Client: Ana",
+		"content: publish home\n\nChanged:\n\nEdity-Client: Ana",
+		"content: publish home\n\nChanged:\n- a\n\nEdity-Client: ",
+	} {
+		if got, ok := ParseMessage(other); ok {
+			t.Errorf("ParseMessage(%q) = %+v, want false", other, got)
+		}
+	}
+}
+
 func TestBumpPatchChangesTheVersionAlone(t *testing.T) {
 	pkg := "{\n  \"name\": \"site\",\n  \"engines\": {\"version\": \"9.9.9\"},\n  \"version\":   \"1.4.9\" ,\n  \"private\": true\n}\n"
 	version, bumped, err := bumpPatch([]byte(pkg))

@@ -75,11 +75,22 @@ Each Site may publish ten times at once, and thirty times an hour after that.
 - **validating** while the workflow runs that the commit's push started (`actions/runs?head_sha=…&event=push`) are under way, or before GitHub lists any.
 - **releasing** once they all passed, until a Release contains the commit.
 - **released** once the highest `vX.Y.Z` tag contains the commit (`compare/<sha>...<tag>`), the commit's own Release or a newer one. `release.yml` pushes the tag only once the image of that version exists. Tags only ever go on `main` with rising versions, so a tag older than the commit's `package.json` version is never compared.
-- **failed** when a CI run of the push failed, or the commit's Release on Publish run did, or nothing came of it in time: no CI run 10 minutes after the commit, or no Release 30 minutes after CI passed while no Release on Publish run of it is under way. A newer Release that contains the commit still makes it released.
+- **failed** when a CI run of the push failed, or the commit's Release on Publish run did, or nothing came of it in time: no CI run 10 minutes after the commit, or no Release 30 minutes after CI passed while no Release on Publish run of it is under way. A newer Release that contains the commit still makes it released. It is answered only once an issue tells the Developer (see below).
 
 A Release on Publish run is the commit's when it is titled `Release <sha>`, as the template names it, and was created after CI last started. A run's own `head_sha` is `main` HEAD when it started, which can be a newer Publish's commit, so it is not used, and neither are check runs, which mix every workflow's jobs on a sha. A cancelled run counts as one a newer run took the place of. Until a Site's workflow names its runs, the commit is released by its tag alone.
 
 The App's rate limit is the installation's, 5,000 calls an hour shared by every Site. A request makes 4 calls, 5 while releasing. Each GET sends the ETag of GitHub's last answer to it, and GitHub does not count a call it answers 304, so a request that finds nothing new costs nothing, and requests for one commit within 5 seconds share one look. The tests count it: an hour of polling one Publish every 5 seconds makes about 2,900 calls, of which GitHub counts 17.
+
+## Issues on the Site repository
+
+The App opens GitHub issues on the Site repository to tell the Developer what they need to know, and stores nothing else.
+
+- **A Publish that failed** (V6). The Editor tells the Client that their changes are saved, are not live yet, and that the Developer has been notified (P5), so the server answers `failed` only once an issue says what failed, for which Publish (its commit, version, page, the Fields and Lists it changed and the Client), with a link to the run. Until it is written, the progress answers 503, or 500 when GitHub refuses it, such as when the repository's Issues are turned off.
+- **Commits that are not content** (V7). A Publish ships everything on `main` since the last Release. Once a Publish is answered, the server compares the highest `vX.Y.Z` tag with its commit, and notes each commit the App did not make that changes files outside `src/content/`, or more of `package.json` than its version. It never delays or fails the Publish: a failure to note them is logged, and the next Publish before the next Release notes them.
+
+Each kind has one open issue at a time, which the App opened and which a hidden marker in its body names. Every failure, and every Publish that ships more such commits, is a comment on it. The body lists, in another hidden marker, what the issue told: a failed run by its ID and attempt, so a run run again that fails again is told again, or a missed deadline by the commit. A failure polled again, or by a server that restarted, is not told twice. One call finds the issues, the App's 30 updated last, closed ones too, and it costs nothing while they stay the same. Once the Developer closes the issue, what it told is not told again, and the next news opens a new issue.
+
+The issue is opened when a request asks for the progress of the failed Publish. A Client who closes the tab before the Release fails stops asking, so the issue waits until the Editor asks again.
 
 ## API
 

@@ -368,6 +368,43 @@ func message(page string, paths []string, client string) string {
 	return b.String()
 }
 
+// A Message is what the commit message of a Publish says.
+type Message struct {
+	Page string
+	// Changed are the paths of the Changes that merged.
+	Changed []string
+	// Client is the name in the Edity-Client trailer.
+	Client string
+}
+
+// ParseMessage reads the commit message of a Publish, as Publish writes it.
+// It returns false for any other message.
+func ParseMessage(m string) (Message, bool) {
+	headline, rest, _ := strings.Cut(m, "\n\n")
+	page, ok := strings.CutPrefix(headline, "content: publish ")
+	if !ok || !pageName.MatchString(page) {
+		return Message{}, false
+	}
+	i := strings.LastIndex(rest, "\n\nEdity-Client: ")
+	if i < 0 {
+		return Message{}, false
+	}
+	list, ok := strings.CutPrefix(rest[:i], "Changed:\n")
+	client := strings.TrimRight(rest[i+len("\n\nEdity-Client: "):], "\n")
+	if !ok || client == "" || strings.Contains(client, "\n") {
+		return Message{}, false
+	}
+	msg := Message{Page: page, Client: client}
+	for line := range strings.SplitSeq(list, "\n") {
+		path, ok := strings.CutPrefix(line, "- ")
+		if !ok || path == "" {
+			return Message{}, false
+		}
+		msg.Changed = append(msg.Changed, path)
+	}
+	return msg, true
+}
+
 // trailerValue is name on one line, which a trailer's value is.
 func trailerValue(name string) string {
 	return strings.Join(strings.FieldsFunc(name, func(r rune) bool {

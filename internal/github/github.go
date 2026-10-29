@@ -299,6 +299,26 @@ func (r *Repo) get(ctx context.Context, path string, out any) error {
 	return a.decode(out)
 }
 
+// Post creates a REST resource of the repository from body, sent as JSON,
+// and reads GitHub's answer into out unless out is nil. path is as Get's.
+// When the call fails on the way, GitHub may have created it all the same.
+func (r *Repo) Post(ctx context.Context, path string, body, out any) error {
+	return r.write(ctx, http.MethodPost, path, body, out)
+}
+
+// Patch changes a REST resource of the repository, as Post creates one.
+func (r *Repo) Patch(ctx context.Context, path string, body, out any) error {
+	return r.write(ctx, http.MethodPatch, path, body, out)
+}
+
+func (r *Repo) write(ctx context.Context, method, path string, body, out any) error {
+	a, err := r.do(ctx, request{method: method, path: "/repos/" + r.path() + "/" + path, body: body})
+	if err != nil {
+		return err
+	}
+	return a.decode(out)
+}
+
 // Head returns the sha of the commit branch points to.
 func (r *Repo) Head(ctx context.Context, branch string) (string, error) {
 	var ref struct {

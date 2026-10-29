@@ -14,7 +14,9 @@ type Services struct {
 	// Sessions is NoSessions when it is nil.
 	Sessions  Sessions
 	Publisher Publisher
-	Tracker   Tracker
+	// Notifier notes what a Publish ships, unless it is nil.
+	Notifier Notifier
+	Tracker  Tracker
 	// RateLimit is DefaultRateLimit when it is zero.
 	RateLimit RateLimit
 }
@@ -33,6 +35,7 @@ func New(sites *site.Registry, logger *slog.Logger, services Services) http.Hand
 	api.Handle("POST /_edity/api/publish", &publishHandler{
 		sessions:  services.Sessions,
 		publisher: services.Publisher,
+		notifier:  services.Notifier,
 		limit:     newLimiter(limit, time.Now),
 		logger:    logger,
 	})
