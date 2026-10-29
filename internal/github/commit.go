@@ -66,7 +66,7 @@ func (r *Repo) CreateCommit(ctx context.Context, c NewCommit) (string, error) {
 		body:   map[string]any{"query": createCommitOnBranch, "variables": map[string]any{"input": input}},
 	}
 	for attempt := 0; ; attempt++ {
-		token, err := r.token(ctx)
+		token, err := r.app.token(ctx, r)
 		if err != nil {
 			return "", err
 		}
@@ -76,7 +76,7 @@ func (r *Repo) CreateCommit(ctx context.Context, c NewCommit) (string, error) {
 		case err != nil:
 			return "", fmt.Errorf("%w: %w", ErrUncertain, err)
 		case a.status == http.StatusUnauthorized && attempt == 0:
-			r.forget(token)
+			r.app.forget(r, token)
 			continue
 		case a.status >= 500:
 			return "", fmt.Errorf("%w: %w", ErrUncertain, a.failure())

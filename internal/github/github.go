@@ -174,17 +174,21 @@ func (r *Repo) String() string {
 	return r.owner + "/" + r.name
 }
 
-// token returns an installation access token for the repository.
-func (r *Repo) token(ctx context.Context) (string, error) {
-	a := r.app
+// installation returns what the App holds of its installation on r.
+func (a *App) installation(r *Repo) *installation {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	in, ok := a.repos[r.String()]
 	if !ok {
 		in = &installation{}
 		a.repos[r.String()] = in
 	}
-	a.mu.Unlock()
+	return in
+}
 
+// token returns an installation access token for the repository r.
+func (a *App) token(ctx context.Context, r *Repo) (string, error) {
+	in := a.installation(r)
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.token != "" && a.now().Before(in.expires.Add(-5*time.Minute)) {
@@ -225,14 +229,9 @@ func (r *Repo) token(ctx context.Context) (string, error) {
 	return in.token, nil
 }
 
-// forget drops a token GitHub no longer takes.
-func (r *Repo) forget(token string) {
-	r.app.mu.Lock()
-	in := r.app.repos[r.String()]
-	r.app.mu.Unlock()
-	if in == nil {
-		return
-	}
+// forget drops a token for the repository r that GitHub no longer takes.
+func (a *App) forget(r *Repo, token string) {
+	in := a.installation(r)
 	in.mu.Lock()
 	if in.token == token {
 		in.token = ""
@@ -263,14 +262,14 @@ func (r *Repo) do(ctx context.Context, req request) (answer, error) {
 		}
 	}
 	for attempt := 0; ; attempt++ {
-		token, err := r.token(ctx)
+		token, err := r.app.token(ctx, r)
 		if err != nil {
 			return answer{}, err
 		}
 		req.auth = token
 		a, err := r.app.send(ctx, req)
 		if err == nil && a.status == http.StatusUnauthorized && attempt == 0 {
-			r.forget(token)
+			r.app.forget(r, token)
 			continue
 		}
 		if err == nil && req.method == http.MethodGet {
