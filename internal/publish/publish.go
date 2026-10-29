@@ -54,8 +54,8 @@ type Publisher struct {
 
 // New returns a Publisher that reaches a Site's repository through
 // repository.
-func New(repository func(site.Repository) Repository) *Publisher {
-	return &Publisher{repository: repository, wait: backOff}
+func New[R Repository](repository func(site.Repository) R) *Publisher {
+	return &Publisher{repository: func(r site.Repository) Repository { return repository(r) }, wait: backOff}
 }
 
 // backOff waits a little longer before each new attempt.

@@ -40,19 +40,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 
 	publisher := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 20 * time.Second})
-	reporter := issues.New(func(r site.Repository) issues.Repository {
-		return publisher.Repo(r.Owner, r.Name)
-	}, publisher.BotLogin, logger)
+	repository := func(r site.Repository) *github.Repo { return publisher.Repo(r.Owner, r.Name) }
+	reporter := issues.New(repository, publisher.BotLogin, logger)
 	services := server.Services{
 		// No Client can log in before ticket 25, so every Publish gets 401.
-		Sessions: server.NoSessions{},
-		Publisher: publish.New(func(r site.Repository) publish.Repository {
-			return publisher.Repo(r.Owner, r.Name)
-		}),
-		Notifier: reporter,
-		Tracker: progress.New(func(r site.Repository) progress.Repository {
-			return publisher.Repo(r.Owner, r.Name)
-		}, publisher.BotLogin, reporter),
+		Sessions:  server.NoSessions{},
+		Publisher: publish.New(repository),
+		Notifier:  reporter,
+		Tracker:   progress.New(repository, publisher.BotLogin, reporter),
 	}
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)
 	served := make(chan error, 1)

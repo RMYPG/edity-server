@@ -147,8 +147,14 @@ type look struct {
 // returns: the publisher App's. It answers that a Publish failed only once
 // reporter has told the Developer (P5). A nil reporter tells no one, for
 // what only reads, such as mise run check:progress.
-func New(repository func(site.Repository) Repository, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
-	return &Tracker{repository: repository, bot: bot, reporter: reporter, now: time.Now, recent: map[key]*look{}}
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
+	return &Tracker{
+		repository: func(r site.Repository) Repository { return repository(r) },
+		bot:        bot,
+		reporter:   reporter,
+		now:        time.Now,
+		recent:     map[key]*look{},
+	}
 }
 
 // Progress returns how far the Publish whose commit is sha has got on s, or

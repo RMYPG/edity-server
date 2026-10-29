@@ -63,8 +63,13 @@ const maxRemembered = 1000
 // New returns a Reporter that reaches a Site's repository through
 // repository, and tells the App's issues by their author, the login bot
 // returns: the publisher App's.
-func New(repository func(site.Repository) Repository, bot func(context.Context) (string, error), logger *slog.Logger) *Reporter {
-	return &Reporter{repository: repository, bot: bot, logger: logger, sites: map[string]*siteIssues{}}
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), logger *slog.Logger) *Reporter {
+	return &Reporter{
+		repository: func(r site.Repository) Repository { return repository(r) },
+		bot:        bot,
+		logger:     logger,
+		sites:      map[string]*siteIssues{},
+	}
 }
 
 func (r *Reporter) site(id string) *siteIssues {
