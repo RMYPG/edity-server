@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"crypto"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -17,15 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
-)
 
-var testKey = sync.OnceValue(func() *rsa.PrivateKey {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	return key
-})
+	"github.com/RMYPG/edity-server/internal/githubtest"
+)
 
 // fakeGitHub answers the calls the App makes on RMYPG/edity-sandbox, as
 // GitHub documents them, and checks how each is authenticated.
@@ -69,7 +62,7 @@ func newFake(t *testing.T) (*fakeGitHub, *App) {
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	app := NewApp(5466528, testKey(), srv.URL, srv.Client())
+	app := NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
 	app.now = func() time.Time {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -223,7 +216,7 @@ func (f *fakeGitHub) checkJWT(token string) {
 	}
 	signature, _ := base64.RawURLEncoding.DecodeString(parts[2])
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err := rsa.VerifyPKCS1v15(&testKey().PublicKey, crypto.SHA256, digest[:], signature); err != nil {
+	if err := rsa.VerifyPKCS1v15(&githubtest.Key().PublicKey, crypto.SHA256, digest[:], signature); err != nil {
 		f.t.Errorf("the JWT's signature: %v", err)
 	}
 	var header struct{ Alg string }

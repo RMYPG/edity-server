@@ -1,11 +1,7 @@
 package progress
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,17 +9,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/textproto"
-	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/github"
+	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -57,60 +50,6 @@ func ciRuns(sha string) string {
 	return "actions/runs?head_sha=" + sha + "&event=push&exclude_pull_requests=true"
 }
 
-// A response is one of GitHub's answers.
-type response struct {
-	status int
-	header http.Header
-	body   []byte
-}
-
-// recorded reads an answer testdata/record.sh recorded: a status line,
-// headers and the body.
-func recorded(t testing.TB, name string) response {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := textproto.NewReader(bufio.NewReader(bytes.NewReader(data)))
-	line, err := r.ReadLine()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, code, _ := strings.Cut(line, " ")
-	status, err := strconv.Atoi(code[:3])
-	if err != nil {
-		t.Fatalf("%s: status line %q", name, line)
-	}
-	header, err := r.ReadMIMEHeader()
-	if err != nil {
-		t.Fatalf("%s: %v", name, err)
-	}
-	body, err := io.ReadAll(r.R)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return response{status: status, header: http.Header(header), body: body}
-}
-
-// edited is r with its JSON body changed by edit: the answers GitHub gave
-// at other moments, or would give had something gone wrong.
-func edited(t testing.TB, r response, edit func(body map[string]any)) response {
-	t.Helper()
-	var body map[string]any
-	dec := json.NewDecoder(bytes.NewReader(r.body))
-	dec.UseNumber()
-	if err := dec.Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	edit(body)
-	b, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return response{status: r.status, header: r.header, body: b}
-}
-
 // eachRun edits every run of a list of workflow runs, and drops those edit
 // returns false for.
 func eachRun(edit func(run map[string]any) bool) func(map[string]any) {
@@ -133,31 +72,31 @@ func inProgress(run map[string]any, updated string) {
 
 // answers is GitHub as it answered about the two Publishes once both were
 // released, recorded, by each call's path and query under the repository.
-func answers(t testing.TB) map[string]response {
+func answers(t testing.TB) map[string]githubtest.Response {
 	t.Helper()
-	return map[string]response{
-		"git/commits/" + first:                       recorded(t, "commit-4bc9310.http"),
-		"git/commits/" + second:                      recorded(t, "commit-f50d2c4.http"),
-		"git/commits/" + developer:                   recorded(t, "commit-31077c3.http"),
-		"contents/package.json?ref=" + first:         recorded(t, "package-4bc9310.http"),
-		"contents/package.json?ref=" + second:        recorded(t, "package-f50d2c4.http"),
-		"contents/package.json?ref=" + developer:     recorded(t, "package-31077c3.http"),
-		ciRuns(first):                                recorded(t, "runs-4bc9310.http"),
-		ciRuns(second):                               recorded(t, "runs-f50d2c4.http"),
-		"git/matching-refs/tags/v":                   recorded(t, "tags.http"),
-		"compare/" + first + "...v1.0.1?per_page=1":  recorded(t, "compare-4bc9310-v1.0.1.http"),
-		"compare/" + first + "...v1.0.2?per_page=1":  recorded(t, "compare-4bc9310-v1.0.2.http"),
-		"compare/" + second + "...v1.0.2?per_page=1": recorded(t, "compare-f50d2c4-v1.0.2.http"),
-		releaseRuns: recorded(t, "release-runs.http"),
+	return map[string]githubtest.Response{
+		"git/commits/" + first:                       githubtest.Recorded(t, "commit-4bc9310.http"),
+		"git/commits/" + second:                      githubtest.Recorded(t, "commit-f50d2c4.http"),
+		"git/commits/" + developer:                   githubtest.Recorded(t, "commit-31077c3.http"),
+		"contents/package.json?ref=" + first:         githubtest.Recorded(t, "package-4bc9310.http"),
+		"contents/package.json?ref=" + second:        githubtest.Recorded(t, "package-f50d2c4.http"),
+		"contents/package.json?ref=" + developer:     githubtest.Recorded(t, "package-31077c3.http"),
+		ciRuns(first):                                githubtest.Recorded(t, "runs-4bc9310.http"),
+		ciRuns(second):                               githubtest.Recorded(t, "runs-f50d2c4.http"),
+		"git/matching-refs/tags/v":                   githubtest.Recorded(t, "tags.http"),
+		"compare/" + first + "...v1.0.1?per_page=1":  githubtest.Recorded(t, "compare-4bc9310-v1.0.1.http"),
+		"compare/" + first + "...v1.0.2?per_page=1":  githubtest.Recorded(t, "compare-4bc9310-v1.0.2.http"),
+		"compare/" + second + "...v1.0.2?per_page=1": githubtest.Recorded(t, "compare-f50d2c4-v1.0.2.http"),
+		releaseRuns: githubtest.Recorded(t, "release-runs.http"),
 	}
 }
 
 // tagsUpTo edits the tag list down to the tags up to last, as it was before
 // the later ones were pushed.
-func tagsUpTo(t testing.TB, a map[string]response, last string) {
+func tagsUpTo(t testing.TB, a map[string]githubtest.Response, last string) {
 	t.Helper()
 	var refs []map[string]any
-	if err := json.Unmarshal(a["git/matching-refs/tags/v"].body, &refs); err != nil {
+	if err := json.Unmarshal(a["git/matching-refs/tags/v"].Body, &refs); err != nil {
 		t.Fatal(err)
 	}
 	for i, ref := range refs {
@@ -171,19 +110,19 @@ func tagsUpTo(t testing.TB, a map[string]response, last string) {
 		t.Fatal(err)
 	}
 	r := a["git/matching-refs/tags/v"]
-	a["git/matching-refs/tags/v"] = response{status: r.status, header: r.header, body: b}
+	a["git/matching-refs/tags/v"] = githubtest.Response{Status: r.Status, Header: r.Header, Body: b}
 }
 
 // editRuns edits a list of workflow runs in a.
-func editRuns(t testing.TB, a map[string]response, path string, edit func(run map[string]any) bool) {
+func editRuns(t testing.TB, a map[string]githubtest.Response, path string, edit func(run map[string]any) bool) {
 	t.Helper()
-	a[path] = edited(t, a[path], eachRun(edit))
+	a[path] = githubtest.Edited(t, a[path], eachRun(edit))
 }
 
 // releaseRunsUntil edits the Release on Publish runs down to those before
 // the second Publish's, as they were until the second's CI passed, and edits
 // the first Publish's run with edit.
-func releaseRunsUntil(t testing.TB, a map[string]response, edit func(run map[string]any)) {
+func releaseRunsUntil(t testing.TB, a map[string]githubtest.Response, edit func(run map[string]any)) {
 	t.Helper()
 	editRuns(t, a, releaseRuns, func(run map[string]any) bool {
 		switch run["head_sha"] {
@@ -206,7 +145,7 @@ type fakeGitHub struct {
 
 	mu      sync.Mutex
 	now     time.Time
-	answers map[string]response
+	answers map[string]githubtest.Response
 	// tokens are the tokens issued, and when each stops working: 55 minutes
 	// after, when the App would replace it.
 	tokens map[string]time.Time
@@ -220,7 +159,7 @@ func newFake(t *testing.T) (*fakeGitHub, *Tracker) {
 	f := &fakeGitHub{t: t, now: at("18:50:01"), answers: answers(t), tokens: map[string]time.Time{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	app := github.NewApp(5466528, testKey(), srv.URL, srv.Client())
+	app := github.NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
 	tracker := New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, nil)
 	tracker.now = f.clock
 	return f, tracker
@@ -255,14 +194,6 @@ func (r *fakeReporter) failures() []Failure {
 // firstMessage is the first Publish's commit message.
 const firstMessage = "content: publish home\n\nChanged:\n- hero.cta\n\nEdity-Client: Edity end-to-end check"
 
-var testKey = sync.OnceValue(func() *rsa.PrivateKey {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	return key
-})
-
 func (f *fakeGitHub) clock() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -271,7 +202,7 @@ func (f *fakeGitHub) clock() time.Time {
 
 // set moves the test's clock to now, and GitHub's answers to answers unless
 // it is nil.
-func (f *fakeGitHub) set(now time.Time, answers map[string]response) {
+func (f *fakeGitHub) set(now time.Time, answers map[string]githubtest.Response) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.now = now
@@ -327,17 +258,17 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.HasPrefix(path, "contents/"); raw != (r.Header.Get("Accept") == "application/vnd.github.raw+json") {
 		f.t.Errorf("%s asked for as %s", path, r.Header.Get("Accept"))
 	}
-	etag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(append([]byte(answer.header.Get("ETag")+token), answer.body...)))
+	etag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(append([]byte(answer.Header.Get("ETag")+token), answer.Body...)))
 	if r.Header.Get("If-None-Match") == etag {
 		f.notModified++
 		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Type", answer.header.Get("Content-Type"))
+	w.Header().Set("Content-Type", answer.Header.Get("Content-Type"))
 	w.Header().Set("ETag", etag)
-	w.WriteHeader(answer.status)
-	_, _ = w.Write(answer.body)
+	w.WriteHeader(answer.Status)
+	_, _ = w.Write(answer.Body)
 }
 
 // A moment is GitHub's answers about the first Publish from a moment on,
@@ -345,7 +276,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type moment struct {
 	from    time.Time
 	stage   Stage
-	answers map[string]response
+	answers map[string]githubtest.Response
 }
 
 // firstPublish is the first Publish's moments, from its push on.
@@ -355,7 +286,7 @@ func firstPublish(t *testing.T) []moment {
 	tagsUpTo(t, pushed, "v1.0.0")
 	editRuns(t, pushed, ciRuns(first), func(map[string]any) bool { return false })
 
-	running := func(updated string) map[string]response {
+	running := func(updated string) map[string]githubtest.Response {
 		a := answers(t)
 		tagsUpTo(t, a, "v1.0.0")
 		editRuns(t, a, ciRuns(first), func(run map[string]any) bool { inProgress(run, updated); return true })
@@ -393,7 +324,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 	for name, c := range map[string]struct {
 		sha  string
 		now  time.Time
-		edit func(t *testing.T, a map[string]response)
+		edit func(t *testing.T, a map[string]githubtest.Response)
 		want Progress
 		// failure is the ID of the Failure the Developer is told of, when
 		// the Publish failed.
@@ -401,7 +332,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 	}{
 		"validating: pushed, before GitHub lists its CI run": {
 			sha: first, now: at("18:50:02"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(map[string]any) bool { return false })
 			},
@@ -409,7 +340,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"validating: CI running": {
 			sha: first, now: at("18:51:00"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { inProgress(run, "2026-10-29T18:51:00Z"); return true })
 			},
@@ -417,7 +348,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: its Release on Publish run under way": {
 			sha: first, now: at("18:52:30"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) {
 					run["display_title"] = "Release " + first
@@ -428,7 +359,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: a Release on Publish run that does not name its commit": {
 			sha: first, now: at("18:52:30"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) { inProgress(run, "2026-10-29T18:52:30Z") })
 			},
@@ -436,7 +367,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: its Release on Publish run cancelled, as one a newer run takes the place of": {
 			sha: first, now: at("18:53:00"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) {
 					run["display_title"], run["conclusion"] = "Release "+first, "cancelled"
@@ -446,7 +377,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: CI ran again since its Release on Publish run failed": {
 			sha: first, now: at("18:55:05"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool {
 					run["run_attempt"], run["run_started_at"], run["updated_at"] = 2, "2026-10-29T18:53:00Z", "2026-10-29T18:55:00Z"
@@ -460,7 +391,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: another Publish's Release failed on main while this commit was its HEAD": {
 			sha: second, now: at("18:55:20"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.1")
 				editRuns(t, a, releaseRuns, func(run map[string]any) bool {
 					switch run["head_sha"] {
@@ -479,7 +410,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"releasing: another Publish's untitled Release failed on this commit": {
 			sha: second, now: at("18:55:20"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.1")
 				editRuns(t, a, releaseRuns, func(run map[string]any) bool {
 					switch run["head_sha"] {
@@ -496,7 +427,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"released: its own Release": {
 			sha: first, now: at("18:53:00"),
-			edit: func(t *testing.T, a map[string]response) { tagsUpTo(t, a, "v1.0.1") },
+			edit: func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.1") },
 			want: Progress{Stage: Released, Version: "1.0.1"},
 		},
 		"released: in a newer Release": {
@@ -509,14 +440,14 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"released: overtaken by a newer Release although its CI failed (P8)": {
 			sha: first, now: at("19:05:00"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
 			},
 			want: Progress{Stage: Released, Version: "1.0.1"},
 		},
 		"failed: CI": {
 			sha: first, now: at("18:52:20"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool { run["conclusion"] = "failure"; return true })
 			},
@@ -525,7 +456,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"failed: CI, run again and failed again": {
 			sha: first, now: at("18:56:00"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(run map[string]any) bool {
 					run["conclusion"], run["run_attempt"], run["run_started_at"] = "failure", 2, "2026-10-29T18:53:00Z"
@@ -537,7 +468,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"failed: its Release on Publish run": {
 			sha: first, now: at("18:53:00"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) {
 					run["display_title"], run["conclusion"] = "Release "+first, "failure"
@@ -548,7 +479,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"failed: no CI run ten minutes after the commit": {
 			sha: first, now: at("19:00:02"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				editRuns(t, a, ciRuns(first), func(map[string]any) bool { return false })
 			},
@@ -557,13 +488,13 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 		},
 		"failed: no Release half an hour after CI passed": {
 			sha: first, now: at("19:22:14"),
-			edit:    func(t *testing.T, a map[string]response) { tagsUpTo(t, a, "v1.0.0") },
+			edit:    func(t *testing.T, a map[string]githubtest.Response) { tagsUpTo(t, a, "v1.0.0") },
 			want:    Progress{Stage: Failed, Version: "1.0.1", Reason: "no Release 30 minutes after CI passed"},
 			failure: "no-release:" + first + "@2026-10-29T18:50:04Z",
 		},
 		"releasing: half an hour after CI passed, its Release on Publish run waiting its turn": {
 			sha: first, now: at("19:22:14"),
-			edit: func(t *testing.T, a map[string]response) {
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.0")
 				releaseRunsUntil(t, a, func(run map[string]any) {
 					run["display_title"] = "Release " + first
@@ -599,7 +530,7 @@ func TestEachStageFromGitHubsAnswers(t *testing.T) {
 }
 
 // ciFailed is GitHub's answers once the first Publish's CI failed.
-func ciFailed(t *testing.T) map[string]response {
+func ciFailed(t *testing.T) map[string]githubtest.Response {
 	t.Helper()
 	a := answers(t)
 	tagsUpTo(t, a, "v1.0.0")
@@ -718,7 +649,7 @@ func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 		name  string
 		now   time.Time
 		want  Stage
-		a     map[string]response
+		a     map[string]githubtest.Response
 		calls int
 	}{
 		{"validating, no run yet", at("18:50:02"), Validating, moments[0].answers, 4},

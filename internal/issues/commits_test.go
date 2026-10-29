@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/publish"
 )
 
@@ -17,7 +18,7 @@ var firstPublish = publish.Published{SHA: first, Version: "1.0.1"}
 // that the Publish ships them.
 func shipsDeveloperCommits(t *testing.T, f *fakeGitHub, sha string) {
 	t.Helper()
-	f.answers["compare/v1.0.0..."+sha] = recorded(t, "compare-0345f67-4bc9310.http")
+	f.answers["compare/v1.0.0..."+sha] = githubtest.Recorded(t, "compare-0345f67-4bc9310.http")
 }
 
 // theirFiles are the files both Developer commits change.
@@ -92,12 +93,12 @@ func TestAPublishOfContentAloneNotesNothing(t *testing.T) {
 		}
 	}
 	for _, sha := range []string{developer, merge} {
-		f.answers["commits/"+sha] = edited(t, f.answers["commits/"+sha], contentOnly)
+		f.answers["commits/"+sha] = githubtest.Edited(t, f.answers["commits/"+sha], contentOnly)
 	}
 	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
 		t.Errorf("Developer commits of content: %v, issues %+v, want none", err, f.opened())
 	}
-	f.answers["compare/v1.0.0..."+first] = edited(t, f.answers["compare/v1.0.0..."+first], contentOnly)
+	f.answers["compare/v1.0.0..."+first] = githubtest.Edited(t, f.answers["compare/v1.0.0..."+first], contentOnly)
 	calls, _, _ := f.counts()
 	if err := f.reporter(t).NoteDeveloperCommits(t.Context(), sandbox, firstPublish); err != nil || len(f.opened()) != 0 {
 		t.Errorf("Developer commits of content: %v, issues %+v, want none", err, f.opened())

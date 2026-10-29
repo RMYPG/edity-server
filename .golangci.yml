@@ -11,8 +11,9 @@ linters:
     - usestdlibvars
   exclusions:
     rules:
-      # Tests hold fake keys and read temporary files on purpose.
-      - path: _test\.go
+      # Tests, and the helpers they share, hold fake keys and read temporary
+      # files and recordings on purpose.
+      - path: (_test\.go|internal/githubtest/)
         linters:
           - gosec
 
