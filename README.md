@@ -72,6 +72,7 @@ Each Site may publish ten times at once, and thirty times an hour after that.
 
 - The `edity` repository generates the Editor's client from it, fetched at a pinned commit of this repository's `main`: `https://raw.githubusercontent.com/RMYPG/edity-server/<commit>/api/openapi.yaml`. It is one file with no references to others, so that fetch is the whole contract, and a commit's file never changes.
 - The handlers' tests check their requests and responses against it. Wrap the server in `apitest.Handler` (`internal/apitest`) in a test, and every response it gives must be one the file describes, every request the file does not allow must get a 4xx, and every route the file does not have must get 404 or 405.
+- It is licensed under [MPL-2.0](api/LICENSE), not AGPL-3.0 like the rest of the server, because `@edity/astro` ships the client generated from it.
 - `mise run lint` lints it with [vacuum](https://quobix.com/vacuum/), with the rules in [`api/vacuum-ruleset.yaml`](api/vacuum-ruleset.yaml).
 
 Sites built with an older Editor keep calling the server, so a change to the file keeps the calls of earlier Editors working.
@@ -82,4 +83,4 @@ CI builds a static binary on `gcr.io/distroless/static-debian13:nonroot` and sta
 
 ## License
 
-[AGPL-3.0](LICENSE). The reason is in [ADR-0006](https://github.com/RMYPG/edity/blob/main/docs/adr/0006-mpl-for-the-packages-agpl-for-the-server.md).
+[AGPL-3.0](LICENSE), except [`api/openapi.yaml`](api/openapi.yaml), which is [MPL-2.0](api/LICENSE) like the edity packages: it is the contract the Editor's client is generated from, and `@edity/astro` ships that client. The reasons are in [ADR-0006](https://github.com/RMYPG/edity/blob/main/docs/adr/0006-mpl-for-the-packages-agpl-for-the-server.md).
