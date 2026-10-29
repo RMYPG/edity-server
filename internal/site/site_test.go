@@ -49,6 +49,22 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 	}
 }
 
+func TestSitesListsEachSiteOnceInTheFilesOrder(t *testing.T) {
+	sites, err := site.Parse(strings.NewReader(withSandboxTwice(t, func(other map[string]any) {
+		other["id"], other["hostnames"] = "fisioindoor", []string{"fisioindoor.example.com"}
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, s := range sites.Sites() {
+		ids = append(ids, s.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"edity-sandbox", "fisioindoor"}) {
+		t.Errorf("Sites = %v, want edity-sandbox, then fisioindoor", ids)
+	}
+}
+
 func TestParseAcceptsLanguageTagsWithAScriptOrRegion(t *testing.T) {
 	for _, locale := range []string{"es", "es-ES", "zh-Hant-TW", "es-419"} {
 		file := withSandbox(t, func(s map[string]any) { s["locale"] = locale })
@@ -87,6 +103,33 @@ func TestLookupFindsNoSiteForAnUnknownHost(t *testing.T) {
 	for _, host := range []string{"", "example.com", "evil.sandbox.example.com", "sandbox.example.com.evil.test"} {
 		if got, ok := sites.Lookup(host); ok {
 			t.Errorf("Lookup(%q) found %q, want no Site", host, got.ID)
+		}
+	}
+}
+
+func TestASiteHasEachOfItsHostnamesWhateverTheirCase(t *testing.T) {
+	s := site.Site{Hostnames: []string{"sandbox.example.com", "localhost"}}
+	for _, host := range []string{"sandbox.example.com", "Sandbox.Example.COM", "sandbox.example.com.", "localhost"} {
+		if !s.HasHostname(host) {
+			t.Errorf("HasHostname(%q) = false", host)
+		}
+	}
+	for _, host := range []string{"", "example.com", "www.sandbox.example.com", "sandbox.example.com:443", "127.0.0.1"} {
+		if s.HasHostname(host) {
+			t.Errorf("HasHostname(%q) = true", host)
+		}
+	}
+}
+
+func TestLoopbackHostnames(t *testing.T) {
+	for _, host := range []string{"localhost", "LOCALHOST", "localhost.", "sandbox.localhost", "127.0.0.1", "127.0.0.53", "::1"} {
+		if !site.IsLoopback(host) {
+			t.Errorf("IsLoopback(%q) = false", host)
+		}
+	}
+	for _, host := range []string{"", "sandbox.example.com", "localhost.example.com", "mylocalhost", "10.0.0.1", "::"} {
+		if site.IsLoopback(host) {
+			t.Errorf("IsLoopback(%q) = true", host)
 		}
 	}
 }

@@ -2,24 +2,55 @@
 package server
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
+// Services are what the routes work with.
+type Services struct {
+	// Sessions is NoSessions when it is nil.
+	Sessions  Sessions
+	Publisher Publisher
+	// Reporter reports what a Publish ships, unless it is nil.
+	Reporter Reporter
+	Tracker  Tracker
+	// RateLimit is DefaultRateLimit when it is zero.
+	RateLimit RateLimit
+}
+
 // New returns the server's handler. Apart from the health check, it answers
 // only requests for one of sites, and 404 to any other host.
-func New(sites *site.Registry, logger *slog.Logger) http.Handler {
+func New(sites *site.Registry, logger *slog.Logger, services Services) http.Handler {
+	if services.Sessions == nil {
+		services.Sessions = NoSessions{}
+	}
+	limit := services.RateLimit
+	if limit.Burst == 0 || limit.Every == 0 {
+		limit = DefaultRateLimit
+	}
 	api := http.NewServeMux()
+	api.Handle("POST /_edity/api/publish", &publishHandler{
+		sessions:  services.Sessions,
+		publisher: services.Publisher,
+		reporter:  services.Reporter,
+		limit:     newLimiter(limit, time.Now),
+		logger:    logger,
+	})
+	api.Handle("GET /_edity/api/publish/{sha}", &progressHandler{
+		sessions: services.Sessions,
+		tracker:  services.Tracker,
+		logger:   logger,
+	})
 	for _, route := range []string{
 		"GET /_edity/login",
 		"GET /_edity/api/auth/callback",
 		"POST /_edity/api/auth/logout",
 		"GET /_edity/api/session",
-		"POST /_edity/api/publish",
-		"GET /_edity/api/publish/{sha}",
 	} {
 		api.HandleFunc(route, notImplemented)
 	}
@@ -47,6 +78,24 @@ func health(w http.ResponseWriter, _ *http.Request) {
 // notImplemented answers the routes of the spec that are not built yet.
 func notImplemented(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+}
+
+// failedOnGitHub answers a request that GitHub failed: 503 with GitHub's
+// wait in Retry-After when it limits the App's requests, 500 when it refuses
+// the App, which the Developer has to fix, and 503 when it could not be
+// reached. again is what the Client does later, such as "publish again".
+func failedOnGitHub(w http.ResponseWriter, err error, again string) {
+	var refused *github.Error
+	switch {
+	case errors.As(err, &refused) && refused.RetryAfter > 0:
+		w.Header().Set("Retry-After", seconds(refused.RetryAfter))
+		http.Error(w, "GitHub is limiting the server's requests: "+again+" later.", http.StatusServiceUnavailable)
+	case errors.Is(err, github.ErrNotInstalled), errors.As(err, &refused) && refused.Status < 500:
+		// The App is not installed, or lacks a permission.
+		http.Error(w, "GitHub refused the publisher App: the Developer has to fix it.", http.StatusInternalServerError)
+	default:
+		http.Error(w, "GitHub could not be reached: "+again+" later.", http.StatusServiceUnavailable)
+	}
 }
 
 // logRequests writes one line per request. It leaves out the query string,

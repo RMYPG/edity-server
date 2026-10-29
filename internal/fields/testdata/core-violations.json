@@ -1,0 +1,433 @@
+{
+  "fixtures/pages/groups.json": {
+    "a page with a group of Fields that holds another group": {
+      "every Field present": [],
+      "an unknown Field in the page": [
+        {
+          "path": "header",
+          "limit": "unknown"
+        }
+      ],
+      "an unknown Field in a group": [
+        {
+          "path": "hero.subtitle",
+          "limit": "unknown"
+        }
+      ],
+      "an unknown Field in a nested group": [
+        {
+          "path": "hero.cta.href",
+          "limit": "unknown"
+        }
+      ],
+      "a missing Field in the page": [
+        {
+          "path": "footer",
+          "limit": "type"
+        }
+      ],
+      "a missing group": [
+        {
+          "path": "hero",
+          "limit": "type"
+        }
+      ],
+      "a missing Field in a group": [
+        {
+          "path": "hero.title",
+          "limit": "type"
+        }
+      ],
+      "a missing Field in a nested group": [
+        {
+          "path": "hero.cta.label",
+          "limit": "type"
+        }
+      ],
+      "a Field in a nested group over maxChars": [
+        {
+          "path": "hero.cta.label",
+          "limit": "maxChars"
+        }
+      ],
+      "a group that is a string": [
+        {
+          "path": "hero",
+          "limit": "type"
+        }
+      ],
+      "a group that is null": [
+        {
+          "path": "hero",
+          "limit": "type"
+        }
+      ],
+      "a group that is a list": [
+        {
+          "path": "hero",
+          "limit": "type"
+        }
+      ],
+      "an empty page": [
+        {
+          "path": "hero",
+          "limit": "type"
+        },
+        {
+          "path": "footer",
+          "limit": "type"
+        }
+      ],
+      "a page that is a list": [
+        {
+          "path": "",
+          "limit": "type"
+        }
+      ],
+      "a page that is a string": [
+        {
+          "path": "",
+          "limit": "type"
+        }
+      ],
+      "a page that is null": [
+        {
+          "path": "",
+          "limit": "type"
+        }
+      ]
+    }
+  },
+  "fixtures/pages/lists.json": {
+    "a page with a List of text Items and a List of Items that hold a List": {
+      "every List within its bounds": [],
+      "no Items where min is 0": [],
+      "max text Items": [],
+      "more than max text Items": [
+        {
+          "path": "bullets",
+          "limit": "maxItems"
+        }
+      ],
+      "fewer than min Items of objects": [
+        {
+          "path": "plans",
+          "limit": "minItems"
+        }
+      ],
+      "max Items of objects": [],
+      "more than max Items of objects": [
+        {
+          "path": "plans",
+          "limit": "maxItems"
+        }
+      ],
+      "a bullet over maxChars": [
+        {
+          "path": "bullets.0",
+          "limit": "maxChars"
+        }
+      ],
+      "a bullet of three emoji": [],
+      "a blank bullet": [
+        {
+          "path": "bullets.0",
+          "limit": "oneLine"
+        }
+      ],
+      "a name over maxChars": [
+        {
+          "path": "plans.0.name",
+          "limit": "maxChars"
+        }
+      ],
+      "a price with three decimals": [
+        {
+          "path": "plans.0.price",
+          "limit": "decimals"
+        }
+      ],
+      "a price above max": [
+        {
+          "path": "plans.0.price",
+          "limit": "max"
+        }
+      ],
+      "max nested Items": [],
+      "fewer than min nested Items": [
+        {
+          "path": "plans.0.features",
+          "limit": "minItems"
+        }
+      ],
+      "more than max nested Items": [
+        {
+          "path": "plans.0.features",
+          "limit": "maxItems"
+        }
+      ],
+      "a nested Item over maxChars": [
+        {
+          "path": "plans.0.features.0",
+          "limit": "maxChars"
+        }
+      ],
+      "an unknown Field in an Item": [
+        {
+          "path": "plans.0.badge",
+          "limit": "unknown"
+        }
+      ],
+      "a missing Field in an Item": [
+        {
+          "path": "plans.0.price",
+          "limit": "type"
+        }
+      ],
+      "a bullet that is a number": [
+        {
+          "path": "bullets.0",
+          "limit": "type"
+        }
+      ],
+      "an Item that is a string": [
+        {
+          "path": "plans.0",
+          "limit": "type"
+        }
+      ],
+      "an Item that is null": [
+        {
+          "path": "plans.0",
+          "limit": "type"
+        }
+      ],
+      "a List that is a string": [
+        {
+          "path": "bullets",
+          "limit": "type"
+        }
+      ],
+      "a List that is an object": [
+        {
+          "path": "plans",
+          "limit": "type"
+        }
+      ]
+    }
+  },
+  "fixtures/pages/numbers.json": {
+    "a page of three number Fields: with two decimals, with none and with one": {
+      "every Field inside its range": [],
+      "every Field at min": [],
+      "every Field at max": [],
+      "a price below min": [
+        {
+          "path": "price",
+          "limit": "min"
+        }
+      ],
+      "a price above max": [
+        {
+          "path": "price",
+          "limit": "max"
+        }
+      ],
+      "sessions below a whole min": [
+        {
+          "path": "sessions",
+          "limit": "min"
+        }
+      ],
+      "sessions above a whole max": [
+        {
+          "path": "sessions",
+          "limit": "max"
+        }
+      ],
+      "a rating below a fractional min": [
+        {
+          "path": "rating",
+          "limit": "min"
+        }
+      ],
+      "a rating above max by one decimal": [
+        {
+          "path": "rating",
+          "limit": "max"
+        }
+      ],
+      "a price with two decimals": [],
+      "a price with one decimal": [],
+      "a price with three decimals": [
+        {
+          "path": "price",
+          "limit": "decimals"
+        }
+      ],
+      "a price of 0.1 + 0.2, which has 17 decimals": [
+        {
+          "path": "price",
+          "limit": "decimals"
+        }
+      ],
+      "a rating with one decimal too many": [
+        {
+          "path": "rating",
+          "limit": "decimals"
+        }
+      ],
+      "whole sessions, where no decimals are allowed": [],
+      "sessions with a decimal, where none are allowed": [
+        {
+          "path": "sessions",
+          "limit": "decimals"
+        }
+      ],
+      "a price that is a string of digits": [
+        {
+          "path": "price",
+          "limit": "type"
+        }
+      ],
+      "a price that is null": [
+        {
+          "path": "price",
+          "limit": "type"
+        }
+      ],
+      "sessions that is a boolean": [
+        {
+          "path": "sessions",
+          "limit": "type"
+        }
+      ],
+      "a missing number Field": [
+        {
+          "path": "rating",
+          "limit": "type"
+        }
+      ]
+    }
+  },
+  "fixtures/pages/text.json": {
+    "a page of two text Fields, one of them with line Limits": {
+      "every Field within its Limits": [],
+      "a ZWJ emoji sequence is one character, so 14 fit": [],
+      "one character over maxChars": [
+        {
+          "path": "title",
+          "limit": "maxChars"
+        }
+      ],
+      "a letter with a combining accent is one character": [],
+      "spaces count as characters": [],
+      "spaces count towards maxChars": [
+        {
+          "path": "title",
+          "limit": "maxChars"
+        }
+      ],
+      "the line Limits are not checked by validators": [],
+      "an empty title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title of spaces only": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title of a tab only": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title of a vertical tab and a form feed only": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title of a no-break space only": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title of an ideographic space only": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "blank around a visible character": [],
+      "a zero-width space is not blank": [],
+      "a vertical tab inside the text is not a line break": [],
+      "a line feed in the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a line feed at the end of the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a carriage return in the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "CRLF in the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a line separator in the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a paragraph separator in the title": [
+        {
+          "path": "title",
+          "limit": "oneLine"
+        }
+      ],
+      "a title that is a number": [
+        {
+          "path": "title",
+          "limit": "type"
+        }
+      ],
+      "a title that is null": [
+        {
+          "path": "title",
+          "limit": "type"
+        }
+      ],
+      "a title that is a list of strings": [
+        {
+          "path": "title",
+          "limit": "type"
+        }
+      ],
+      "a missing text Field": [
+        {
+          "path": "subtitle",
+          "limit": "type"
+        }
+      ]
+    }
+  }
+}

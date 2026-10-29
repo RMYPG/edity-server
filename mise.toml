@@ -1,17 +1,27 @@
 [tools]
 go = "1.27.2"
 golangci-lint = "2.15.0"
+# Lints the OpenAPI file, api/openapi.yaml.
+vacuum = "0.35.7"
 jactionlint = "2.3.0"
 # jactionlint checks workflow scripts with it.
 shellcheck = "0.11.0"
 # Same version as platform's mise.toml.
 infisical = "0.43.132"
+# The testdata/record.sh scripts read GitHub with it.
+gh = "2.102.0"
+# Runs the generators that read Prettier and @edity/core from an edity
+# checkout. The same version as edity's mise.toml.
+node = "24.22.1"
 
 [tasks.lint]
-description = "Lint the Go code and the GitHub workflows"
+description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
 run = [
   "go mod tidy -diff",
   "golangci-lint run",
+  # A List's Items are content values too, so ContentValue refers to itself
+  # through an array on purpose.
+  "vacuum lint --ruleset api/vacuum-ruleset.yaml --fail-severity warn --ignore-array-circle-ref --details --no-banner --no-update-check api/openapi.yaml",
   "jactionlint",
 ]
 
@@ -23,7 +33,42 @@ run = "go test ./..."
 description = "Run the linters and the tests, as CI does before building the image"
 depends = ["lint", "test"]
 
+[tasks."check:sandbox"]
+description = "Publish on RMYPG/edity-sandbox for real, twice, and wait for each Release, as the Developer's own Infisical user (not part of ci)"
+env = { EDITY_SITES_FILE = "{{config_root}}/sites.dev.json" }
+run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run TestPublishOnTheSandbox -count=1 -timeout 75m -v ./internal/publish"
+
+[tasks."check:progress"]
+description = "Read the progress of the two Publishes check:sandbox made on RMYPG/edity-sandbox from GitHub, reading only, as the Developer's own Infisical user (not part of ci)"
+env = { EDITY_SITES_FILE = "{{config_root}}/sites.dev.json" }
+run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run TestProgressOnTheSandbox -count=1 -v ./internal/progress"
+
 [tasks.dev]
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
 env = { EDITY_SITES_FILE = "sites.dev.json" }
 run = "infisical run --env=dev --path=/github -- go run ./cmd/edity-server"
+
+[tasks."record:progress"]
+description = "Record the GitHub answers internal/progress's tests replay, from RMYPG/edity-sandbox, reading only, as whoever gh is logged in as"
+dir = "{{config_root}}/internal/progress/testdata"
+run = "bash record.sh"
+
+[tasks."record:issues"]
+description = "Record the GitHub answers internal/issues's tests replay, from RMYPG/edity-sandbox, reading only, as whoever gh is logged in as"
+dir = "{{config_root}}/internal/issues/testdata"
+run = "bash record.sh"
+
+[tasks."generate:emoji"]
+description = "Write internal/content/emoji.go, the width tables of Prettier's line fitting, from the Prettier of an edity checkout"
+usage = 'arg "<edity>" help="The path of an edity checkout with its npm dependencies installed (mise run deps there)"'
+run = 'node internal/content/emoji.mjs "$usage_edity"'
+
+[tasks."record:prettier"]
+description = "Record in internal/content/testdata/prettier.json what the Prettier of an edity checkout makes of the content tests' cases"
+usage = 'arg "<edity>" help="The path of an edity checkout with its npm dependencies installed (mise run deps there)"'
+run = 'node internal/content/testdata/prettier.mjs "$usage_edity"'
+
+[tasks."record:core-violations"]
+description = "Record in internal/fields/testdata/core-violations.json what @edity/core finds in the contracts' page fixtures, from an edity checkout"
+usage = 'arg "<edity>" help="The path of an edity checkout at the contracts tag go.mod pins, built with mise run build there"'
+run = 'node internal/fields/testdata/core-violations.mjs "$usage_edity"'

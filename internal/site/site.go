@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -56,7 +57,13 @@ type Kubernetes struct {
 
 // Registry is the list of Sites, indexed by hostname.
 type Registry struct {
+	sites  []Site
 	byHost map[string]Site
+}
+
+// Sites returns every Site, in the order of the Sites file.
+func (reg *Registry) Sites() []Site {
+	return slices.Clone(reg.sites)
 }
 
 // Parse reads a Sites file and checks that every Site in it is complete and
@@ -104,6 +111,7 @@ func Parse(r io.Reader) (*Registry, error) {
 			errs = append(errs, fmt.Errorf("two Sites have the id %q", s.ID))
 		}
 		ids[s.ID] = true
+		reg.sites = append(reg.sites, s)
 		for _, h := range s.Hostnames {
 			h = canonicalHost(h)
 			if _, taken := reg.byHost[h]; taken {
@@ -223,6 +231,27 @@ func (reg *Registry) Lookup(host string) (Site, bool) {
 	}
 	s, ok := reg.byHost[canonicalHost(host)]
 	return s, ok
+}
+
+// HasHostname tells whether host, a hostname with no port, is one of the
+// Site's, whatever its case.
+func (s Site) HasHostname(host string) bool {
+	for _, h := range s.Hostnames {
+		if canonicalHost(h) == canonicalHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLoopback tells whether host, a hostname with no port, names the machine
+// it is on: localhost or a name under it (RFC 6761), or a loopback address.
+func IsLoopback(host string) bool {
+	host = canonicalHost(host)
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
 }
 
 // canonicalHost ignores case and the trailing dot of a fully qualified name.

@@ -1,0 +1,740 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Unlike the rest of edity-server, which is AGPL-3.0, this file is
+# MPL-2.0, as the edity packages are: edity vendors it, and @edity/astro
+# ships the Editor's API client generated from it. See README.md, "License".
+
+openapi: 3.1.1
+
+info:
+  title: edity-server
+  version: 0.1.0
+  summary: The HTTP API the Editor calls on each Site's own origin.
+  description: |
+    The API of edity-server, the one server behind every Site's
+    `/_edity/login` and `/_edity/api/*` routes (ADR-0001). The Editor's API
+    client is generated from this file, and the server's tests check its handlers
+    against it (N10). Terms such as Site, Field, List, Draft, Change, Publish,
+    Release, Conflict and Limit are those of Edity's glossary, `CONTEXT.md` in
+    the edity repository, and IDs such as A4 are the spec's requirements.
+
+    Every route is on the Site's own origin, and the server tells the Site by
+    the request's `Host`: on a hostname that is not one of a configured Site's,
+    every route answers 404.
+
+    Logging in through Zitadel (A1) ends with two cookies on the Site's
+    origin, both for 30 days (A2):
+
+    - `edity_session`, the session. It is `HttpOnly` and scoped to
+      `/_edity/api`, so only the server reads it.
+    - `edity=1`, the marker. It is scoped to `/` and readable by the page,
+      whose inline check loads the Editor only when it is there (A4).
+
+    The routes under `/_edity/api/` other than the login callback refuse a
+    request from another origin (A4). A Site's own origins are
+    `https://<hostname>`, on any port, for each of its hostnames, and
+    `http://<hostname>` too when the hostname is a loopback one such as
+    `localhost`, as in development.
+
+    Sites built with an older Editor keep calling the server, so a change to
+    this file keeps the calls of earlier Editors working.
+  contact:
+    name: edity-server
+    url: https://github.com/RMYPG/edity-server
+  license:
+    name: MPL-2.0
+    identifier: MPL-2.0
+
+servers:
+  - url: https://{hostname}
+    description: A Site's own origin.
+    variables:
+      hostname:
+        default: sandbox.example.com
+        description: One of the Site's hostnames in the server's Sites file.
+  - url: http://localhost:8080
+    description: '`mise run dev`, which serves `edity-sandbox` on `localhost`.'
+
+tags:
+  - name: Login
+    description: Logging a Client in and out through Zitadel, and their session (A1 to A4).
+  - name: Publish
+    description: Publishing a Draft, and the progress of the Release it becomes (P3, P4, V1 to V8).
+
+paths:
+  /_edity/login:
+    get:
+      operationId: login
+      tags: [Login]
+      summary: Log in
+      description: |
+        Starts logging in: redirects to Zitadel, with OIDC's authorization
+        code flow and PKCE (A1). The browser navigates here; the Editor does
+        not fetch it.
+      security: []
+      parameters:
+        - name: return
+          in: query
+          description: |
+            Where on the Site to come back to once logged in, such as
+            `/precios`, so the Client is back on the page whose Draft they were
+            editing (A3). Only a path on the Site's own origin counts: anything
+            that could lead elsewhere, such as `//other.example` or
+            `https://other.example/`, counts as left out. The Site's home, `/`,
+            when it is left out.
+          schema:
+            type: string
+          example: /precios
+      responses:
+        '302':
+          description: To Zitadel, to log in.
+          headers:
+            Location:
+              description: Zitadel's authorization endpoint, with the login's parameters.
+              required: true
+              schema:
+                type: string
+                format: uri
+        '404':
+          $ref: '#/components/responses/UnknownSite'
+
+  /_edity/api/auth/callback:
+    get:
+      operationId: finishLogin
+      tags: [Login]
+      summary: Finish logging in
+      description: |
+        Where Zitadel sends the browser back after a login. When the Client has
+        the Site's role (`zitadelRole` in the Sites file), it sets the session
+        cookie and the `edity=1` marker and goes back to the path the login
+        was asked to `return` to (A1). The browser navigates here; the Editor
+        does not fetch it.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          description: Zitadel's authorization code, when the login succeeded.
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: The login's state, which ties this callback to the login this browser started.
+          schema:
+            type: string
+        - name: error
+          in: query
+          description: Zitadel's OAuth 2.0 error code, when the login failed or the Client cancelled it.
+          schema:
+            type: string
+        - name: error_description
+          in: query
+          description: Zitadel's description of the error.
+          schema:
+            type: string
+      responses:
+        '303':
+          description: Logged in, back on the Site.
+          headers:
+            Location:
+              description: The path the login was asked to `return` to, or `/`.
+              required: true
+              schema:
+                type: string
+            Set-Cookie:
+              description: |
+                The session cookie `edity_session`, `HttpOnly`, and the marker
+                `edity=1`, both for 30 days (A2). The response has one
+                `Set-Cookie` header for each.
+              required: true
+              schema:
+                type: string
+        '400':
+          description: |
+            Not the end of a login this browser started: its `state` is
+            missing or not this browser's, it has no `code`, or Zitadel
+            answered an `error`. No session.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: The person who logged in does not have the Site's role, so is not one of its Clients. No session (A1).
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          $ref: '#/components/responses/UnknownSite'
+
+  /_edity/api/auth/logout:
+    post:
+      operationId: logout
+      tags: [Login]
+      summary: Log out
+      description: |
+        Ends the Client's session and clears both cookies (A2). It does so
+        whether or not the request carried a session.
+      security:
+        - {}
+        - session: []
+      responses:
+        '204':
+          description: Logged out.
+          headers:
+            Set-Cookie:
+              description: |
+                Clears the session cookie `edity_session` and the marker
+                `edity`. The response has one `Set-Cookie` header for each.
+              required: true
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/ForeignOrigin'
+        '404':
+          $ref: '#/components/responses/UnknownSite'
+
+  /_edity/api/session:
+    get:
+      operationId: getSession
+      tags: [Login]
+      summary: Who is logged in
+      description: |
+        The Client the session is for. The session cookie is `HttpOnly`, so
+        the Editor asks here before it starts, and removes itself on a 401
+        (A4).
+      responses:
+        '200':
+          description: The Client is logged in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+              example:
+                name: Ana García
+                locale: es
+                site: edity-sandbox
+        '401':
+          $ref: '#/components/responses/NoSession'
+        '403':
+          $ref: '#/components/responses/ForeignOrigin'
+        '404':
+          $ref: '#/components/responses/UnknownSite'
+
+  /_edity/api/publish:
+    post:
+      operationId: publish
+      tags: [Publish]
+      summary: Publish a Draft
+      description: |
+        Publishes the Changes of a Draft on one page (P3). The server reads
+        the page's content and Field definitions from the Site repository at
+        `main` HEAD, and validates the Changes against them (V1). A Change
+        whose stored value is no longer its `before` is a Conflict (V2),
+        unless the stored value is its `after` already: that Change is
+        already published, whatever its `before`, and has nothing to commit.
+        The Changes that merge become one commit on top of that HEAD, with a
+        patch bump of the Site's `package.json`, which a workflow in the
+        Site repository then cuts as a Release (V3).
+
+        The Release ships everything on `main`. Once it has answered, the
+        server reports on an issue of the Site repository the commits since
+        the last Release that the edity-publisher GitHub App did not make and
+        that change more than content (V7). Reporting them never delays or
+        fails the Publish.
+      requestBody:
+        description: The Draft's Changes on the page.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRequest'
+            example:
+              page: home
+              changes:
+                - path: hero.title
+                  before: Fisioterapia a domicilio
+                  after: Fisioterapia en casa
+                - path: plans.1.price
+                  before: 45
+                  after: 49.5
+                - path: services
+                  before: [Masaje, Punción seca]
+                  after: [Punción seca, Masaje, Pilates]
+      responses:
+        '202':
+          description: |
+            Committed. Every Change merged but those in `conflicts`, which the
+            Editor keeps in the Draft, and those already published, which are
+            neither in `conflicts` nor in the commit. The commit becomes a
+            Release once the Site's CI passes on it (ADR-0003).
+
+            When every Change is already published, as when the Client
+            publishes again a Draft whose answer they missed, nothing is
+            committed, and `sha` and `version` are the page's last Publish:
+            the newest commit on `main` that the edity-publisher GitHub App
+            made to the page's content, at its version, which the Editor
+            follows as its own. When the App made none, the Changes are
+            answered as though none were already published: each merges, or
+            is a Conflict when the stored value is not its `before`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Published'
+              example:
+                sha: 4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2
+                version: 1.4.3
+                conflicts:
+                  - path: hero.title
+          links:
+            status:
+              operationId: getPublishStatus
+              parameters:
+                sha: $response.body#/sha
+              description: The progress of the Release the commit becomes.
+        '400':
+          description: |
+            Not a Publish: the body is not JSON sent as `application/json`,
+            or not of the shape of `PublishRequest`, or two of its Changes
+            are for one Field or List, or one is inside the other's, which
+            the Editor never sends. Nothing was committed.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '401':
+          $ref: '#/components/responses/NoSession'
+        '403':
+          $ref: '#/components/responses/ForeignOrigin'
+        '404':
+          $ref: '#/components/responses/UnknownSite'
+        '413':
+          description: |
+            The body is larger than a Publish can be, a mebibyte. Nothing
+            was committed.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: |
+            Nothing merged, so nothing was committed: every Change is a
+            Conflict (V2), or already published. `conflicts` lists the
+            Conflicts alone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflicts'
+              example:
+                conflicts:
+                  - path: hero.title
+                  - path: services
+        '422':
+          description: |
+            Some Change breaks the page's Field definitions at `main` HEAD, or
+            is not for one of its Fields or Lists (V1). A page with no content
+            at `main` HEAD has neither, so each of its Changes is `unknown`.
+            The content the Changes that merge would make must pass the
+            Field definitions as a whole, so a violation can also be where no
+            Change is, in content already on `main` (N3). Nothing was
+            committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Violations'
+              example:
+                violations:
+                  - path: hero.title
+                    limit: maxChars
+                  - path: plans.1.features
+                    limit: maxItems
+        '429':
+          description: |
+            The Site has published too often lately (V5). Nothing was
+            committed.
+          headers:
+            Retry-After:
+              description: How many seconds to wait before the Site can publish again.
+              required: true
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '500':
+          description: |
+            The Site repository can't be published as it is: its content or
+            Field definitions at `main` HEAD can't be read, its
+            `package.json` has no `X.Y.Z` version to bump, or the
+            edity-publisher GitHub App is not installed on it or lacks a
+            permission. Nothing was committed, and the Developer has to fix
+            the repository.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: |
+            The Publish did not go through for now: GitHub could not be
+            reached or is limiting the server's requests, or `main` kept
+            moving while the server committed. The Client can publish again
+            later.
+          headers:
+            Retry-After:
+              description: How many seconds to wait before publishing again, when the server knows.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+
+  /_edity/api/publish/{sha}:
+    get:
+      operationId: getPublishStatus
+      tags: [Publish]
+      summary: Progress of a Publish
+      description: |
+        Where the Release of a Publish's commit is (P4). The server works it
+        out from GitHub on each request, and stores nothing (V8), so the
+        progress survives a reload and a restart of the server. A commit
+        counts as released once its Release or a newer one contains it, and
+        will count as live once the Site runs one of them (P8).
+
+        Requests for the same commit within 5 seconds get the same answer, so
+        polling more often than that tells nothing more.
+
+        The server answers `failed` only once an issue on the Site repository
+        tells the Developer what failed (V6), so the Editor can tell the
+        Client that the Developer has been notified (P5).
+      parameters:
+        - name: sha
+          in: path
+          required: true
+          description: The commit's sha, as Publish answered it.
+          schema:
+            $ref: '#/components/schemas/Sha'
+          example: 4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2
+      responses:
+        '200':
+          description: The Release's progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishStatus'
+              example:
+                stage: releasing
+                version: 1.4.3
+        '401':
+          $ref: '#/components/responses/NoSession'
+        '403':
+          $ref: '#/components/responses/ForeignOrigin'
+        '404':
+          description: |
+            The hostname is not one of a configured Site's, or `sha` is not
+            the commit of a Publish on the Site: the Site repository has no
+            such commit, or the edity-publisher GitHub App did not author it.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '500':
+          description: |
+            The edity-publisher GitHub App is not installed on the Site
+            repository, or lacks a permission, or the repository's Issues are
+            turned off, so a failed Release can't be told to the Developer.
+            The Developer has to fix it.
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: |
+            GitHub could not be reached or is limiting the server's requests,
+            so the progress is not known for now, or the Release failed and
+            the issue that tells the Developer is not written yet (P5). The
+            Editor asks again later.
+          headers:
+            Retry-After:
+              description: How many seconds to wait before asking again, when the server knows.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: edity_session
+      description: |
+        The session cookie that logging in sets (A2). It is `HttpOnly` and
+        scoped to `/_edity/api`, so the browser sends it with every call to
+        the API and the page can't read it.
+
+  responses:
+    NoSession:
+      description: |
+        No session, or an expired one. The Client logs in again (A3).
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/Message'
+    ForeignOrigin:
+      description: |
+        The request's `Origin` is not one of the Site's own, or it is a
+        `POST` without an `Origin` (A4).
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/Message'
+    UnknownSite:
+      description: The hostname is not one of a configured Site's.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/Message'
+
+  schemas:
+    Session:
+      description: The Client a session is for.
+      type: object
+      required: [name, locale, site]
+      additionalProperties: false
+      properties:
+        name:
+          description: The Client's name in Zitadel.
+          type: string
+        locale:
+          description: The Client's locale in Zitadel, such as `es` or `en-GB`, which the Editor's language follows (N6).
+          type: string
+        site:
+          description: The Site's `id` in the server's Sites file, such as `edity-sandbox`.
+          type: string
+
+    PublishRequest:
+      description: The Changes of a Draft on one page, as Publish sends them (P3).
+      type: object
+      required: [page, changes]
+      additionalProperties: false
+      properties:
+        page:
+          description: |
+            The page's name, its content collection's. Its content is
+            `src/content/<page>.json` in the Site repository, and its generated
+            JSON Schema `src/content/<page>.schema.json`.
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+          examples: [home]
+        changes:
+          description: The Draft's Changes, in the order the Client made them.
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Change'
+
+    Change:
+      description: |
+        One Change of a Draft: an edit to a Field, or to the structure of a
+        List, which is one Change for the whole List (S7).
+      type: object
+      required: [path, before, after]
+      additionalProperties: false
+      properties:
+        path:
+          description: |
+            The content path of the Field or List. The path of an Item that is
+            an object, such as `plans.1`, names neither.
+          $ref: '#/components/schemas/ContentPath'
+        before:
+          description: |
+            The value the Client changed: the one in the content the page was
+            built from when they first made the Change. The server compares it
+            with the stored value to find Conflicts (V2).
+          $ref: '#/components/schemas/ContentValue'
+        after:
+          description: The value in the Draft.
+          $ref: '#/components/schemas/ContentValue'
+
+    ContentPath:
+      description: |
+        Where a Field, a List or an Item is in a page's content: its keys and
+        Item indices, dot-separated.
+      type: string
+      pattern: ^[^.]+(\.[^.]+)*$
+      examples: [hero.title, services, plans.1.price, plans.1.features.0]
+
+    ContentValue:
+      description: A value in a page's content, the Editor's `ContentValue`.
+      anyOf:
+        - description: A text Field's text.
+          type: string
+        - description: A number Field's number.
+          type: number
+        - description: A List's Items.
+          type: array
+          items:
+            $ref: '#/components/schemas/ContentValue'
+        - description: An Item's Fields and Lists.
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ContentValue'
+
+    Published:
+      description: A Publish that was committed, or, when every Change was already published, the page's last Publish.
+      type: object
+      required: [sha, version]
+      additionalProperties: false
+      properties:
+        sha:
+          description: The commit's sha, to follow its progress with `getPublishStatus`.
+          $ref: '#/components/schemas/Sha'
+        version:
+          description: The version of the Release the commit becomes, which its progress also gives.
+          $ref: '#/components/schemas/Version'
+        conflicts:
+          description: The Changes that did not merge. Left out when every Change merged.
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Conflict'
+
+    Conflicts:
+      description: A Publish in which nothing merged.
+      type: object
+      required: [conflicts]
+      additionalProperties: false
+      properties:
+        conflicts:
+          description: Every Change of the Publish that is a Conflict, which is all of them but those already published.
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Conflict'
+
+    Conflict:
+      description: |
+        A Change whose stored value at `main` HEAD is no longer its `before`,
+        because a newer Release changed it too (V2). It stays in the Draft.
+      type: object
+      required: [path]
+      additionalProperties: false
+      properties:
+        path:
+          description: The Change's path, as Publish sent it.
+          $ref: '#/components/schemas/ContentPath'
+
+    Violations:
+      description: A Publish that breaks the page's Field definitions.
+      type: object
+      required: [violations]
+      additionalProperties: false
+      properties:
+        violations:
+          description: Everything the Changes break of the page's Field definitions.
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Violation'
+
+    Violation:
+      description: |
+        What a Change breaks of the page's Field definitions, named as
+        `@edity/core`'s `Violation` names it in its `rule`, so the Editor
+        shows the server's verdicts as it shows its own.
+      type: object
+      required: [path, limit]
+      additionalProperties: false
+      properties:
+        path:
+          description: |
+            The content path of the value that breaks it: the Change's,
+            or one inside it, such as `plans.1.features` inside a Change to
+            `plans`.
+          $ref: '#/components/schemas/ContentPath'
+        limit:
+          description: |
+            What the value breaks: one of the Limits of its Field or List,
+            or, for `type`, `unknown` and `oneLine`, what the Field
+            definitions hold whatever their Limits.
+
+            - `type`: not what the Field definitions hold there: text, a
+              number, a List's Items or an Item's Fields.
+            - `unknown`: a key the Field definitions do not have, or a Change
+              whose path is not one of the page's Fields or Lists.
+            - `oneLine`: text with no visible character, or with a line break.
+            - `maxChars`: text with more visible characters than its Limit.
+            - `min`, `max`: a number out of its range.
+            - `decimals`: a number with more decimal places than its Limit.
+            - `minItems`, `maxItems`: a List with fewer or more Items than its
+              bounds.
+
+            The server does not check line Limits: only a browser can measure
+            lines.
+          type: string
+          enum: [type, unknown, oneLine, maxChars, min, max, decimals, minItems, maxItems]
+
+    PublishStatus:
+      description: Where the Release of a Publish's commit is (P4).
+      type: object
+      required: [stage, version]
+      additionalProperties: false
+      properties:
+        stage:
+          description: |
+            - `validating`: the Site's CI runs on the commit, or is about to.
+            - `releasing`: CI passed, and the Release is being cut: no
+              `v<version>` tag contains the commit yet. The tag is pushed only
+              once its image exists.
+            - `released`: the commit's Release exists, or a newer one that
+              contains the commit (P8), even if the commit's own CI or
+              Release failed.
+            - `deploying`: the Release is being deployed. On hold, not
+              reported yet (ticket 33).
+            - `live`: the Site runs the Release or a newer one (P8). On hold,
+              not reported yet (ticket 33).
+            - `failed`: a CI run on the commit failed, or the Release on
+              Publish run that cuts its Release did, or nothing came of it in
+              time: no CI run 10 minutes after the commit, or no Release 30
+              minutes after CI passed while no Release on Publish run is
+              under way, on a Site whose Release on Publish runs are named
+              after their commits. A CI run that waits for a runner keeps the
+              commit `validating`. The changes are saved but not live, and the Developer has
+              been told: an issue on the Site repository says what failed and
+              links to the run (P5, V6). The server answers `failed` only once
+              that issue is written, and 503 until then. It is not the end: a
+              newer Release that contains the commit makes it `released`.
+          type: string
+          enum: [validating, releasing, released, deploying, live, failed]
+        version:
+          description: The version of the Release the commit becomes.
+          $ref: '#/components/schemas/Version'
+
+    Sha:
+      description: A Git commit's sha, in lowercase hex.
+      type: string
+      pattern: ^[0-9a-f]{40}$
+      examples: [4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2]
+
+    Version:
+      description: |
+        A Release's version: the `version` in the Site's `package.json` at the
+        commit, such as `1.4.3`, whose Release is tagged `v1.4.3`.
+      type: string
+      pattern: ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$
+      examples: [1.4.3]
+
+    Message:
+      description: A message for the Developer, in English. The Editor tells the Client what happened in their own language from the status alone (P5).
+      type: string
+
+security:
+  - session: []
