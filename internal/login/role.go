@@ -43,6 +43,9 @@ const (
 	maxAnswer = 1 << 20
 )
 
+// errTokenRefused is Zitadel's API refusing the service user's access token.
+var errTokenRefused = errors.New("listing authorizations: Zitadel refused the access token")
+
 // A ServiceUser is who the server asks Zitadel about roles as: a read-only
 // service user, and its JWT-profile key.
 type ServiceUser struct {
@@ -56,11 +59,19 @@ type ServiceUser struct {
 // Its error means that Zitadel gave no answer, which says nothing about the
 // role.
 func (z *Zitadel) HoldsRole(ctx context.Context, s site.Site, c publish.Client) (bool, error) {
-	token, err := z.accessToken(ctx)
+	token, err := z.accessToken(ctx, "")
 	if err != nil {
 		return false, err
 	}
 	list, err := z.authorizations(ctx, token, c.ID, s.ZitadelRole)
+	if errors.Is(err, errTokenRefused) {
+		// Zitadel can stop honouring a token sooner than it said. One more try
+		// with a new one: a refusal of that too is no answer.
+		if token, err = z.accessToken(ctx, token); err != nil {
+			return false, err
+		}
+		list, err = z.authorizations(ctx, token, c.ID, s.ZitadelRole)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -139,6 +150,9 @@ func (z *Zitadel) authorizations(ctx context.Context, token, userID, role string
 		return authorizationList{}, fmt.Errorf("listing authorizations: %w", err)
 	}
 	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode == http.StatusUnauthorized {
+		return authorizationList{}, errTokenRefused
+	}
 	if res.StatusCode != http.StatusOK {
 		return authorizationList{}, fmt.Errorf("listing authorizations: HTTP %d", res.StatusCode)
 	}
@@ -153,11 +167,12 @@ func (z *Zitadel) authorizations(ctx context.Context, token, userID, role string
 }
 
 // accessToken returns an access token of the service user, kept until
-// shortly before it expires.
-func (z *Zitadel) accessToken(ctx context.Context) (string, error) {
+// shortly before it expires. refused, if not empty, is a token Zitadel has
+// just refused, which it will not return.
+func (z *Zitadel) accessToken(ctx context.Context, refused string) (string, error) {
 	z.tokenMu.Lock()
 	defer z.tokenMu.Unlock()
-	if z.token != "" && z.now().Add(tokenMargin).Before(z.tokenExpires) {
+	if z.token != "" && z.token != refused && z.now().Add(tokenMargin).Before(z.tokenExpires) {
 		return z.token, nil
 	}
 	provider, err := z.discover(ctx)

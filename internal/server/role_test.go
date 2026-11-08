@@ -1,12 +1,15 @@
 package server_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/RMYPG/edity-server/internal/oidctest"
 )
@@ -237,5 +240,112 @@ func TestAPublishGoesThroughAgainOnceZitadelAnswers(t *testing.T) {
 
 	if rec := b.publish(); rec.Code != http.StatusAccepted {
 		t.Errorf("once it answers: status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+}
+
+func TestPublishesShareAnAccessToken(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+
+	for i := range 3 {
+		if rec := b.publish(); rec.Code != http.StatusAccepted {
+			t.Fatalf("Publish %d: status = %d, want %d: %s", i+1, rec.Code, http.StatusAccepted, rec.Body)
+		}
+	}
+
+	if got := lt.zitadel.AccessTokensIssued(); got != 1 {
+		t.Errorf("%d access tokens issued, want 1", got)
+	}
+	if got := len(lt.zitadel.ListRequests()); got != 3 {
+		t.Errorf("%d ListAuthorizations calls, want 3", got)
+	}
+}
+
+func TestAPublishGetsANewAccessTokenShortlyBeforeTheOldExpires(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	b.publish()
+
+	lt.now = lt.now.Add(oidctest.AccessTokenLifetime - 2*time.Minute)
+	b.publish()
+	if got := lt.zitadel.AccessTokensIssued(); got != 1 {
+		t.Errorf("two minutes before it expires: %d access tokens issued, want 1", got)
+	}
+
+	lt.now = lt.now.Add(90 * time.Second)
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Errorf("half a minute before it expires: status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+	if got := lt.zitadel.AccessTokensIssued(); got != 2 {
+		t.Errorf("half a minute before it expires: %d access tokens issued, want 2", got)
+	}
+}
+
+func TestAPublishGetsANewAccessTokenOnceTheOldExpired(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	b.publish()
+
+	lt.now = lt.now.Add(oidctest.AccessTokenLifetime + time.Minute)
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+
+	if got := lt.zitadel.AccessTokensIssued(); got != 2 {
+		t.Errorf("%d access tokens issued, want 2", got)
+	}
+}
+
+// Zitadel may stop honouring a token sooner than it said, as when a token's
+// signing key is rotated or its service user is reset.
+func TestAPublishGetsANewAccessTokenWhenZitadelRefusesTheOld(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	b.publish()
+	lt.zitadel.RevokeAccessTokens()
+
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+
+	if got := lt.zitadel.AccessTokensIssued(); got != 2 {
+		t.Errorf("%d access tokens issued, want 2", got)
+	}
+}
+
+func TestAPublishGets503WhenZitadelKeepsRefusingAccessTokens(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	lt.zitadel.ListStatus = http.StatusUnauthorized
+
+	rec := b.publish()
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+	}
+	if lt.publisher.calls() != 0 {
+		t.Errorf("committed %d times, want none", lt.publisher.calls())
+	}
+	if got := len(lt.zitadel.ListRequests()); got != 2 {
+		t.Errorf("%d ListAuthorizations calls, want 2: one, and one with a new token", got)
+	}
+	sessionKept(t, b, rec)
+}
+
+func TestAPublishWithAKeyZitadelDoesNotKnowGets503(t *testing.T) {
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lt := newLoginTest(t)
+	lt.serviceKey = other
+	lt.start()
+	b := lt.withRole()
+
+	if rec := b.publish(); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+	}
+	if got := lt.zitadel.AccessTokensIssued(); got != 0 {
+		t.Errorf("%d access tokens issued, want none", got)
 	}
 }

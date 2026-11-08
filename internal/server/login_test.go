@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"crypto/rsa"
 	"encoding/base64"
 	"io"
 	"log/slog"
@@ -31,18 +32,19 @@ var ana = oidctest.Person{Subject: "2200", Name: "Ana García", Locale: "es", Ro
 // loginTest is a server of the two Sites, whose Clients log in at a fake
 // Zitadel.
 type loginTest struct {
-	t         *testing.T
-	zitadel   *oidctest.Provider
-	publisher *fakePublisher
-	now       time.Time
-	key       []byte
-	handler   http.Handler
+	t          *testing.T
+	zitadel    *oidctest.Provider
+	publisher  *fakePublisher
+	now        time.Time
+	key        []byte
+	serviceKey *rsa.PrivateKey
+	handler    http.Handler
 }
 
 func newLoginTest(t *testing.T) *loginTest {
 	t.Helper()
 	lt := &loginTest{
-		t: t, zitadel: oidctest.New(t, clientID), now: time.Now(), key: sessionKey,
+		t: t, zitadel: oidctest.New(t, clientID), now: time.Now(), key: sessionKey, serviceKey: oidctest.ServiceKey(),
 		publisher: &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}},
 	}
 	lt.start()
@@ -60,7 +62,7 @@ func (lt *loginTest) start() {
 	lt.zitadel.Now = func() time.Time { return lt.now }
 	zitadel, err := login.New(login.Options{
 		Issuer: lt.zitadel.Issuer(), ClientID: clientID, Key: lt.key, ProjectID: oidctest.ProjectID,
-		ServiceUser: login.ServiceUser{ID: oidctest.ServiceUserID, KeyID: oidctest.ServiceKeyID, Key: oidctest.ServiceKey()},
+		ServiceUser: login.ServiceUser{ID: oidctest.ServiceUserID, KeyID: oidctest.ServiceKeyID, Key: lt.serviceKey},
 		Now:         func() time.Time { return lt.now },
 	})
 	if err != nil {

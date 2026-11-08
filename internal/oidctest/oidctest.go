@@ -179,6 +179,14 @@ func (p *Provider) AccessTokensIssued() int {
 	return p.issued
 }
 
+// RevokeAccessTokens makes Zitadel refuse every access token it gave so far,
+// whenever they would have expired.
+func (p *Provider) RevokeAccessTokens() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clear(p.access)
+}
+
 // ListRequests returns the bodies of the ListAuthorizations calls so far.
 func (p *Provider) ListRequests() []string {
 	p.mu.Lock()
@@ -489,21 +497,6 @@ func (l listRequest) matches(a Authorization) bool {
 // access token has to be current, with every authorization that meets its
 // filters.
 func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
-	if p.ListStatus != 0 {
-		writeJSON(w, p.ListStatus, map[string]string{"code": "internal", "message": "failing"})
-		return
-	}
-	p.mu.Lock()
-	expires, known := p.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
-	p.mu.Unlock()
-	if !known || !expires.After(p.now()) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "unauthenticated", "message": "Errors.Token.Invalid"})
-		return
-	}
-	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Connect-Protocol-Version") != "1" {
-		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"code": "unknown", "message": "not Connect's JSON"})
-		return
-	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "invalid_argument", "message": "unreadable"})
@@ -512,7 +505,20 @@ func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.lists = append(p.lists, string(body))
 	all := slices.Clone(p.authorizations)
+	expires, known := p.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 	p.mu.Unlock()
+	if p.ListStatus != 0 {
+		writeJSON(w, p.ListStatus, map[string]string{"code": "internal", "message": "failing"})
+		return
+	}
+	if !known || !expires.After(p.now()) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "unauthenticated", "message": "Errors.Token.Invalid"})
+		return
+	}
+	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Connect-Protocol-Version") != "1" {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"code": "unknown", "message": "not Connect's JSON"})
+		return
+	}
 	if p.ListBody != "" {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(p.ListBody))
