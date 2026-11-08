@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -84,6 +85,11 @@ func Load(getenv func(string) string) (Config, error) {
 	read("EDITY_ZITADEL_ISSUER", func(issuer string) error {
 		if !isIssuer(issuer) {
 			return errors.New("not an https URL")
+		}
+		// OIDC compares the issuer exactly, and Zitadel's has no trailing
+		// slash, so every login would fail.
+		if strings.HasSuffix(issuer, "/") {
+			return errors.New("ends with a slash, which Zitadel's issuer does not")
 		}
 		cfg.Zitadel.Issuer = issuer
 		return nil

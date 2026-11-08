@@ -46,6 +46,9 @@ func (h *loginHandler) finish(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, login.ErrNoRole):
 		h.refused(r, s, err)
 		http.Error(w, "The person who logged in is not one of the Site's Clients.", http.StatusForbidden)
+	case errors.Is(err, login.ErrNoName):
+		h.refused(r, s, err)
+		http.Error(w, "The person who logged in has no name in Zitadel, which every Publish records: the Developer has to fix it.", http.StatusForbidden)
 	case errors.Is(err, login.ErrNotALogin):
 		h.refused(r, s, err)
 		http.Error(w, "Not the end of a login this browser started: log in again.", http.StatusBadRequest)
@@ -70,9 +73,7 @@ func (h *loginHandler) logout(w http.ResponseWriter, r *http.Request) {
 // session answers GET /_edity/api/session.
 func (h *loginHandler) session(w http.ResponseWriter, r *http.Request) {
 	s, _ := site.FromContext(r.Context())
-	// A browser sends no Origin with a GET from the page's own origin, and
-	// one with a GET from any other.
-	if r.Header.Get("Origin") != "" && !fromSite(r, s) {
+	if !getFromSite(r, s) {
 		http.Error(w, "The request does not come from the Site's own origin.", http.StatusForbidden)
 		return
 	}

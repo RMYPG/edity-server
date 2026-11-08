@@ -235,6 +235,8 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 		"http://sandbox.example.com", "http://sandbox.example.com:80",
 		// Loopback, but none of the Site's hostnames.
 		"http://127.0.0.1:4321", "https://localhost.evil.example.com",
+		// The Site's hostname, on a port the request did not come to.
+		"https://sandbox.example.com:8443",
 	} {
 		p := &fakePublisher{}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
@@ -248,15 +250,32 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 		}
 	}
 	// One of the Site's hostnames over https, whatever the case of its
-	// host or its port, and localhost over http, as in development.
+	// host, and localhost over http on any port, as in development.
 	for _, origin := range []string{
-		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:8443",
+		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:443",
 		"https://www.sandbox.example.com", "http://localhost:4321", "https://localhost",
 	} {
 		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { r.Header.Set("Origin", origin) })
 		if rec.Code != http.StatusAccepted {
 			t.Errorf("Origin %q: status = %d, want 202", origin, rec.Code)
+		}
+	}
+}
+
+func TestAnOriginCountsOnThePortTheRequestCameTo(t *testing.T) {
+	for origin, want := range map[string]int{
+		"https://sandbox.example.com:8443": http.StatusAccepted,
+		"https://sandbox.example.com":      http.StatusForbidden,
+		"https://sandbox.example.com:9443": http.StatusForbidden,
+	} {
+		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
+		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
+			r.Host = "sandbox.example.com:8443"
+			r.Header.Set("Origin", origin)
+		})
+		if rec.Code != want {
+			t.Errorf("Origin %q: status = %d, want %d", origin, rec.Code, want)
 		}
 	}
 }

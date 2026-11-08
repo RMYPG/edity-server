@@ -34,9 +34,9 @@ info:
 
     The routes under `/_edity/api/` other than the login callback refuse a
     request from another origin (A4). A Site's own origins are
-    `https://<hostname>`, on any port, for each of its hostnames, and
-    `http://<hostname>` too when the hostname is a loopback one such as
-    `localhost`, as in development.
+    `https://<hostname>`, on the port the request came to, for each of its
+    hostnames, and `http://<hostname>` too when the hostname is a loopback
+    one such as `localhost`, on any port, as in development.
 
     Sites built with an older Editor keep calling the server, so a change to
     this file keeps the calls of earlier Editors working.
@@ -71,8 +71,9 @@ paths:
       summary: Log in
       description: |
         Starts logging in: redirects to Zitadel, with OIDC's authorization
-        code flow and PKCE (A1). The browser navigates here; the Editor does
-        not fetch it.
+        code flow and PKCE (A1), and asks the person to authenticate there
+        even if Zitadel already has a session for them. The browser navigates
+        here; the Editor does not fetch it.
       security: []
       parameters:
         - name: return
@@ -174,8 +175,9 @@ paths:
         '403':
           description: |
             The person who logged in does not have the Site's role, so is not
-            one of its Clients. No session, and any session the browser had
-            is cleared (A1).
+            one of its Clients, or Zitadel gives them no name, which every
+            Publish records. No session, and any session the browser had is
+            cleared (A1).
           content:
             text/plain:
               schema:
@@ -507,8 +509,9 @@ components:
             $ref: '#/components/schemas/Message'
     ForeignOrigin:
       description: |
-        The request's `Origin` is not one of the Site's own, or it is a
-        `POST` without an `Origin` (A4).
+        The request's `Origin` is not one of the Site's own, it is a `POST`
+        without an `Origin`, or it is a `GET` without an `Origin` whose
+        `Sec-Fetch-Site` says it comes from another origin (A4).
       content:
         text/plain:
           schema:

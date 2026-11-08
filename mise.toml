@@ -16,11 +16,13 @@ node = "24.22.1"
 
 # Placeholders so that mise run dev and the sandbox checks, which read the whole
 # configuration, can start. The login answers 503 until Infisical's dev secrets
-# hold Zitadel's real values, which take the place of these.
+# hold Zitadel's real values, which take the place of these. The session key is
+# new each time: anyone can read a fixed one here, and forge a session on a dev
+# server that holds the publisher's real key.
 [env]
 EDITY_ZITADEL_ISSUER = "https://zitadel.invalid"
 EDITY_ZITADEL_CLIENT_ID = "dev"
-EDITY_SESSION_KEY = "ZGV2LW9ubHktbm90LWEtc2VjcmV0LXNlc3Npb24ta2U="
+EDITY_SESSION_KEY = "{{ exec(command='head -c 32 /dev/urandom | base64') }}"
 
 [tasks.lint]
 description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
@@ -53,7 +55,7 @@ run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run Test
 
 [tasks.dev]
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
-env = { EDITY_SITES_FILE = "sites.dev.json" }
+env = { EDITY_SITES_FILE = "sites.dev.json", EDITY_ADDR = "127.0.0.1:8080" }
 run = "infisical run --env=dev --path=/github -- go run ./cmd/edity-server"
 
 [tasks."record:progress"]

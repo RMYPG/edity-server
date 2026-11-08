@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -220,11 +221,12 @@ func readDraft(body []byte) (publish.Draft, error) {
 }
 
 // fromSite tells whether r comes from a page of s, by its Origin (A4): one
-// of the Site's hostnames over https, on any port, or over http only for a
-// loopback hostname such as localhost, which a Site has in development
-// (sites.dev.json). The request's own scheme says nothing of the page's:
-// behind Cloudflare Tunnel the server sees every request over http. A
-// browser sends Origin with every POST.
+// of the Site's hostnames over https, on the port r came to, or over http
+// only for a loopback hostname such as localhost, which a Site has in
+// development (sites.dev.json), on any port, as the Site's dev server has
+// its own. The request's own scheme says nothing of the page's: behind
+// Cloudflare Tunnel the server sees every request over http. A browser sends
+// Origin with every POST.
 func fromSite(r *http.Request, s site.Site) bool {
 	origin, err := url.Parse(r.Header.Get("Origin"))
 	if err != nil || origin.Host == "" || origin.Opaque != "" || origin.User != nil ||
@@ -232,16 +234,45 @@ func fromSite(r *http.Request, s site.Site) bool {
 		return false
 	}
 	host := origin.Hostname()
+	loopback := site.IsLoopback(host)
 	switch origin.Scheme {
 	case "https":
 	case "http":
-		if !site.IsLoopback(host) {
+		if !loopback {
 			return false
 		}
 	default:
 		return false
 	}
-	return s.HasHostname(host)
+	return s.HasHostname(host) && (loopback || httpsPort(origin.Host) == httpsPort(r.Host))
+}
+
+// httpsPort is the port of a host with an optional port, "" for https's
+// default, which a browser leaves out.
+func httpsPort(host string) string {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil || port == "443" {
+		return ""
+	}
+	return port
+}
+
+// getFromSite tells whether r, a GET, may be answered (A4). A browser sends
+// an Origin with a fetch from another origin but none with a no-cors GET,
+// such as an <img>'s, whatever page it comes from, so without one
+// Sec-Fetch-Site tells: every browser the Editor runs on sends it (N5), and
+// no script can set it. What sends neither is no browser, and has only its
+// session to show.
+func getFromSite(r *http.Request, s site.Site) bool {
+	if r.Header.Get("Origin") != "" {
+		return fromSite(r, s)
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+		return true
+	default:
+		return false
+	}
 }
 
 type conflict struct {

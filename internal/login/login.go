@@ -94,6 +94,10 @@ var ErrNotALogin = errors.New("not the end of a login this browser started")
 // not one of its Clients (A1).
 var ErrNoRole = errors.New("the person who logged in does not have the Site's role")
 
+// ErrNoName is a login by someone Zitadel gives no name, which every Publish
+// records in its commit.
+var ErrNoName = errors.New("the person who logged in has no name in Zitadel")
+
 // Options are what a Zitadel needs.
 type Options struct {
 	// Issuer is the Zitadel instance's URL.
@@ -176,12 +180,14 @@ func (z *Zitadel) config(provider *oidc.Provider, r *http.Request, s site.Site) 
 // An attempt is a login under way, which ties the callback to the browser
 // that started it.
 type attempt struct {
-	Site     string    `json:"site"`
-	State    string    `json:"state"`
-	Nonce    string    `json:"nonce"`
-	Verifier string    `json:"verifier"`
-	Return   string    `json:"return"`
-	Expires  time.Time `json:"expires"`
+	Site     string `json:"site"`
+	State    string `json:"state"`
+	Nonce    string `json:"nonce"`
+	Verifier string `json:"verifier"`
+	// Return is bytes because JSON writes them in base64. Its escapes can make
+	// a string six times as long, past what a browser keeps in a cookie.
+	Return  []byte    `json:"return"`
+	Expires time.Time `json:"expires"`
 }
 
 // Start begins a login on s. It sets the attempt's cookie and returns the URL
@@ -196,7 +202,7 @@ func (z *Zitadel) Start(w http.ResponseWriter, r *http.Request, s site.Site) (st
 		State:    rand.Text(),
 		Nonce:    rand.Text(),
 		Verifier: oauth2.GenerateVerifier(),
-		Return:   returnPath(r.URL.Query().Get("return")),
+		Return:   []byte(returnPath(r.URL.Query().Get("return"))),
 		Expires:  z.now().Add(attemptLifetime),
 	}
 	sealed, err := z.sealer.seal(attemptCookie.name, a)
@@ -204,7 +210,11 @@ func (z *Zitadel) Start(w http.ResponseWriter, r *http.Request, s site.Site) (st
 		return "", err
 	}
 	attemptCookie.set(w, r, sealed)
-	return z.config(provider, r, s).AuthCodeURL(a.State, oidc.Nonce(a.Nonce), oauth2.S256ChallengeOption(a.Verifier)), nil
+	return z.config(provider, r, s).AuthCodeURL(a.State, oidc.Nonce(a.Nonce), oauth2.S256ChallengeOption(a.Verifier),
+		// Zitadel keeps its own session, which a logout here leaves alone.
+		// Without this it would log the browser back in with no credentials,
+		// and offer no other account to someone refused for lack of the role.
+		oauth2.SetAuthURLParam("prompt", "login")), nil
 }
 
 // A session is a logged-in Client of one Site, which its cookie holds.
@@ -217,19 +227,21 @@ type session struct {
 
 // Finish ends a login on s: it sets the session's cookies, and returns the
 // path to send the browser back to. Its errors are ErrNotALogin, ErrNoRole,
-// or any other when Zitadel could not be reached.
+// ErrNoName, or any other when Zitadel could not be reached.
 func (z *Zitadel) Finish(w http.ResponseWriter, r *http.Request, s site.Site) (string, error) {
-	// A login can be finished once, whatever comes of it.
-	attemptCookie.clear(w, r)
-
 	a, ok := z.readAttempt(r, s)
 	if !ok {
 		return "", fmt.Errorf("%w: no login of this browser is under way", ErrNotALogin)
 	}
 	q := r.URL.Query()
 	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(a.State)) != 1 {
+		// It may be an older login of this browser, in another tab, which
+		// must not end the one under way.
 		return "", fmt.Errorf("%w: the state is not this browser's", ErrNotALogin)
 	}
+	// A login can be finished once, whatever comes of it.
+	attemptCookie.clear(w, r)
+
 	if answer := q.Get("error"); answer != "" {
 		return "", fmt.Errorf("%w: Zitadel answered %s", ErrNotALogin, answer)
 	}
@@ -246,6 +258,10 @@ func (z *Zitadel) Finish(w http.ResponseWriter, r *http.Request, s site.Site) (s
 		clearSession(w, r)
 		return "", ErrNoRole
 	}
+	if !(publish.Client{Name: who.Name}).Named() {
+		clearSession(w, r)
+		return "", ErrNoName
+	}
 
 	sealed, err := z.sealer.seal(sessionCookie.name, session{
 		// A Client with no preferred language in Zitadel has no locale.
@@ -256,7 +272,7 @@ func (z *Zitadel) Finish(w http.ResponseWriter, r *http.Request, s site.Site) (s
 	}
 	sessionCookie.set(w, r, sealed)
 	markerCookie.set(w, r, "1")
-	return a.Return, nil
+	return string(a.Return), nil
 }
 
 // readAttempt reads the login r's browser started on s, while it lasts.
@@ -316,7 +332,8 @@ func (z *Zitadel) identify(r *http.Request, s site.Site, a attempt, code string)
 }
 
 // Logout clears the session's cookies. The session itself is only that
-// cookie, so there is nothing else to end.
+// cookie, so there is nothing else to end: Zitadel's own session stays, and
+// every login asks the person to authenticate again.
 func (z *Zitadel) Logout(w http.ResponseWriter, r *http.Request) {
 	clearSession(w, r)
 }

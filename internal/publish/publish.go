@@ -84,6 +84,12 @@ type Client struct {
 	Locale string
 }
 
+// Named tells whether the Client has a name the Edity-Client trailer can
+// carry, without which no Publish goes through.
+func (c Client) Named() bool {
+	return trailerValue(c.Name) != ""
+}
+
 // A Draft is the Changes a Client publishes on one page.
 type Draft struct {
 	// Page is the page's name, its content collection's.

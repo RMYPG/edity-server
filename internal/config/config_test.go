@@ -143,6 +143,7 @@ func TestLoadRejectsABadVariable(t *testing.T) {
 		{"issuer not a URL", "EDITY_ZITADEL_ISSUER", "zitadel.example.com", "EDITY_ZITADEL_ISSUER: not an https URL"},
 		{"issuer over http", "EDITY_ZITADEL_ISSUER", "http://zitadel.example.com", "EDITY_ZITADEL_ISSUER: not an https URL"},
 		{"issuer with a query", "EDITY_ZITADEL_ISSUER", "https://zitadel.example.com?a=b", "EDITY_ZITADEL_ISSUER: not an https URL"},
+		{"issuer with a trailing slash", "EDITY_ZITADEL_ISSUER", "https://zitadel.example.com/", "EDITY_ZITADEL_ISSUER: ends with a slash"},
 		{"session key not base64", "EDITY_SESSION_KEY", "c2VjcmV0LWtleS1ieXRlcw==!", "EDITY_SESSION_KEY: not 32 bytes in base64"},
 		{"session key too short", "EDITY_SESSION_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_SESSION_KEY: not 32 bytes in base64"},
 	}

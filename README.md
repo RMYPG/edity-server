@@ -22,7 +22,7 @@ Run the checks CI runs, the Go, OpenAPI and workflow linters and the tests, with
 mise run ci
 ```
 
-`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`. Until those secrets hold Zitadel's values, the placeholders in `mise.toml` let it start, and `/_edity/login` answers 503.
+`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`. It listens on loopback only. Until those secrets hold Zitadel's values, the placeholders in `mise.toml` let it start, and `/_edity/login` answers 503. Until they hold an `EDITY_SESSION_KEY`, the key is a new random one on each run, so sessions end when the server restarts.
 
 `mise run check:sandbox` publishes on `RMYPG/edity-sandbox` for real, with the same secrets: it changes a Field, waits for the Release, and puts it back, so it makes two commits on the sandbox's `main` and two Releases. It also checks that a Conflict and a broken Limit commit nothing. It takes as long as two runs of the sandbox's CI, and is not part of `mise run ci`.
 
@@ -44,7 +44,7 @@ The server reads its environment at startup and refuses to start if a variable i
 | `EDITY_SITES_FILE` | Path of the Sites file |
 | `EDITY_PUBLISHER_GITHUB_APP_ID` | ID of the `edity-publisher` GitHub App |
 | `EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY` | Its private key, in PEM |
-| `EDITY_ZITADEL_ISSUER` | URL of the Zitadel instance Clients log in through, over `https` (or `http` on a loopback hostname) |
+| `EDITY_ZITADEL_ISSUER` | URL of the Zitadel instance Clients log in through, over `https` (or `http` on a loopback hostname), with no trailing slash |
 | `EDITY_ZITADEL_CLIENT_ID` | ID of the server's OIDC client on it |
 | `EDITY_SESSION_KEY` | 32 random bytes in base64, such as `openssl rand -base64 32`, that seal the Clients' sessions |
 
@@ -71,7 +71,7 @@ The server refuses to start on a Sites file it can't read unambiguously: unknown
 
 ## Login
 
-A Client logs in through Zitadel with OIDC's authorization code flow and PKCE. `GET /_edity/login` redirects to Zitadel, and `GET /_edity/api/auth/callback` checks the login and that the person has the Site's role (`zitadelRole` in the Sites file). The server reads their name, locale and roles from Zitadel's userinfo endpoint. Someone without the role gets 403 and no session.
+A Client logs in through Zitadel with OIDC's authorization code flow and PKCE. `GET /_edity/login` redirects to Zitadel, and `GET /_edity/api/auth/callback` checks the login and that the person has the Site's role (`zitadelRole` in the Sites file). The server reads their name, locale and roles from Zitadel's userinfo endpoint. Someone without the role, or to whom Zitadel gives no name, which every Publish records, gets 403 and no session. Every login asks the person to authenticate at Zitadel again, however recently they did (`prompt=login`).
 
 Zitadel needs, in the Edity project:
 
@@ -83,8 +83,9 @@ A session is the `edity_session` cookie, `HttpOnly` and `SameSite=Strict` on `/_
 - A session survives a restart, as long as the key stays the same. Changing the key logs every Client out.
 - A session is checked against its Site, so one Site's cookie is worth nothing on another.
 - Logging out clears the browser's cookies, and a removed role is noticed at the next login. Until then a session that was copied, or whose Client lost the role, lasts until it expires.
+- Logging out leaves Zitadel's own session alone. It can't log the browser back in, because every login asks for credentials.
 
-Every API call but the callback refuses another origin (A4): `POST` must carry an `Origin` that is one of the Site's, and `GET` may carry none.
+Every API call but the callback refuses another origin (A4). `POST` must carry an `Origin` that is one of the Site's. `GET` may carry none, unless `Sec-Fetch-Site` says it comes from another origin, as a browser's `<img>` request from another page does. On a Site's real hostnames the `Origin` must be on the port the request came to. On a loopback hostname any port counts, as the Site's dev server has its own.
 
 ## Publish
 

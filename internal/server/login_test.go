@@ -457,6 +457,64 @@ func jarCookie(t *testing.T, b *browser, path, name string) string {
 	return ""
 }
 
+func TestEveryLoginAsksThePersonToAuthenticateAtZitadel(t *testing.T) {
+	lt := newLoginTest(t)
+
+	authorize, err := url.Parse(lt.browser("sandbox.example.com").started())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without it Zitadel's own session, which a logout here leaves alone, logs
+	// the browser back in with no credentials.
+	if got := authorize.Query().Get("prompt"); got != "login" {
+		t.Errorf("prompt = %q, want login", got)
+	}
+}
+
+func TestOfTwoOverlappingLoginsTheNewestFinishes(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.browser("sandbox.example.com")
+	older := lt.zitadel.LogIn(t, b.started(), ana)
+	newer := lt.zitadel.LogIn(t, b.started(), ana)
+
+	if rec := b.get(older); rec.Code != http.StatusBadRequest {
+		t.Fatalf("the older login's callback: status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body)
+	}
+	if rec := b.get(newer); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the newer login's callback: status = %d, want %d: %s", rec.Code, http.StatusSeeOther, rec.Body)
+	}
+
+	if rec := b.session(); rec.Code != http.StatusOK {
+		t.Errorf("GET session: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestALoginWithNoNameGetsNoSession(t *testing.T) {
+	for name, edit := range map[string]func(map[string]any){
+		"empty":       func(c map[string]any) { c["name"] = "" },
+		"only spaces": func(c map[string]any) { c["name"] = "  \t " },
+		"left out":    func(c map[string]any) { delete(c, "name") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			lt := newLoginTest(t)
+			b := lt.browser("sandbox.example.com")
+			b.logIn(ana, "/_edity/login")
+			lt.zitadel.EditUserInfo = edit
+
+			rec := b.logIn(ana, "/_edity/login")
+
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body)
+			}
+			noSession(t, rec)
+			if rec := b.session(); rec.Code != http.StatusUnauthorized {
+				t.Errorf("GET session: status = %d, want 401: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 func TestALoginCanBeFinishedOnlyOnce(t *testing.T) {
 	lt := newLoginTest(t)
 	b := lt.browser("sandbox.example.com")
@@ -555,6 +613,7 @@ func TestLogoutClearsTheCookiesWithoutASessionToo(t *testing.T) {
 func TestEveryAPICallFromAnotherOriginIsRejected(t *testing.T) {
 	foreign := []string{
 		"https://evil.example.com", "null", "https://fisioindoor.example.com", "http://sandbox.example.com",
+		"https://sandbox.example.com:8443",
 	}
 	for _, op := range apitest.Operations(t) {
 		if !strings.HasPrefix(op.Path, "/_edity/api/") || op.ID == "finishLogin" {
@@ -577,6 +636,46 @@ func TestEveryAPICallFromAnotherOriginIsRejected(t *testing.T) {
 				t.Errorf("GET session afterwards: status = %d, want 200: %s", rec.Code, rec.Body)
 			}
 		})
+	}
+}
+
+// A browser sends no Origin with a no-cors GET, such as an <img>'s, whatever
+// page it comes from.
+func TestAGetFromAnotherOriginIsRejectedEvenWithoutAnOrigin(t *testing.T) {
+	for _, op := range apitest.Operations(t) {
+		if op.Method != http.MethodGet || !strings.HasPrefix(op.Path, "/_edity/api/") || op.ID == "finishLogin" {
+			continue
+		}
+		t.Run(op.ID, func(t *testing.T) {
+			lt := newLoginTest(t)
+			b := lt.browser("sandbox.example.com")
+			b.logIn(ana, "/_edity/login")
+
+			for _, where := range []string{"same-site", "cross-site"} {
+				rec := b.send(op.Method, op.Example, func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", where) })
+				if rec.Code != http.StatusForbidden {
+					t.Errorf("Sec-Fetch-Site %s: status = %d, want %d: %s", where, rec.Code, http.StatusForbidden, rec.Body)
+				}
+			}
+		})
+	}
+}
+
+func TestAGetWithoutAnOriginIsAnsweredUnlessItComesFromElsewhere(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.browser("sandbox.example.com")
+	b.logIn(ana, "/_edity/login")
+
+	// The page's own fetch, someone opening the URL, and what is no browser.
+	for _, where := range []string{"same-origin", "none", ""} {
+		rec := b.send(http.MethodGet, "/_edity/api/session", func(r *http.Request) {
+			if where != "" {
+				r.Header.Set("Sec-Fetch-Site", where)
+			}
+		})
+		if rec.Code != http.StatusOK {
+			t.Errorf("Sec-Fetch-Site %q: status = %d, want 200: %s", where, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -623,12 +722,34 @@ func TestALoginReturnsOnlyToAPathOnTheSite(t *testing.T) {
 		"precios":                "/",
 		// Longer than the login's cookie can carry.
 		"/" + strings.Repeat("a", 4096): "/",
+		// As long as it can carry, of what a JSON string makes longest.
+		"/?q=" + strings.Repeat("&", 1020): "/?q=" + strings.Repeat("&", 1020),
 	} {
 		lt := newLoginTest(t)
 		rec := lt.browser("sandbox.example.com").logIn(ana, "/_edity/login?return="+url.QueryEscape(value))
 
 		if got := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || got != want {
 			t.Errorf("return %q: status = %d, Location = %q, want %d and %q", value, rec.Code, got, http.StatusSeeOther, want)
+		}
+	}
+}
+
+func TestTheLoginsCookieFitsInABrowserWhateverItReturnsTo(t *testing.T) {
+	// A browser drops a cookie whose name and value are longer than this,
+	// and the callback would find no login under way.
+	const browserLimit = 4096
+	for _, repeated := range []string{"&", "<", ">"} {
+		lt := newLoginTest(t)
+		value := "/?q=" + strings.Repeat(repeated, 1020)
+
+		rec := lt.browser("sandbox.example.com").get("/_edity/login?return=" + url.QueryEscape(value))
+
+		c := responseCookie(t, rec, "edity_login")
+		if c == nil {
+			t.Fatalf("return of %q: no login cookie: status = %d", repeated, rec.Code)
+		}
+		if size := len(c.Name) + len(c.Value); size > browserLimit {
+			t.Errorf("return of %q: the cookie is %d bytes, over the browser's %d", repeated, size, browserLimit)
 		}
 	}
 }
