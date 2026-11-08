@@ -1,9 +1,11 @@
 package config_test
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -28,11 +30,8 @@ const sandbox = `{
 
 func TestLoadReadsTheSitesAndThePublisherApp(t *testing.T) {
 	key := newKey(t)
-	env := map[string]string{
-		"EDITY_SITES_FILE":                       writeFile(t, sandbox),
-		"EDITY_PUBLISHER_GITHUB_APP_ID":          "123456",
-		"EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY": pkcs1(key),
-	}
+	env := validEnv(t)
+	env["EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY"] = pkcs1(key)
 
 	cfg, err := config.Load(getenv(env))
 	if err != nil {
@@ -50,6 +49,36 @@ func TestLoadReadsTheSitesAndThePublisherApp(t *testing.T) {
 	}
 	if !key.Equal(cfg.Publisher.PrivateKey) {
 		t.Error("Publisher.PrivateKey is not the key in EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY")
+	}
+}
+
+func TestLoadReadsZitadelAndTheSessionKey(t *testing.T) {
+	cfg, err := config.Load(getenv(validEnv(t)))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Zitadel.Issuer != "https://zitadel.example.com" {
+		t.Errorf("Zitadel.Issuer = %q, want https://zitadel.example.com", cfg.Zitadel.Issuer)
+	}
+	if cfg.Zitadel.ClientID != "337@edity" {
+		t.Errorf("Zitadel.ClientID = %q, want 337@edity", cfg.Zitadel.ClientID)
+	}
+	if want := []byte("0123456789abcdef0123456789abcdef"); !bytes.Equal(cfg.SessionKey, want) {
+		t.Errorf("SessionKey = %q, want %q", cfg.SessionKey, want)
+	}
+}
+
+func TestLoadAcceptsAnIssuerOverHTTPOnlyOnLoopback(t *testing.T) {
+	env := validEnv(t)
+	env["EDITY_ZITADEL_ISSUER"] = "http://localhost:8081"
+
+	cfg, err := config.Load(getenv(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Zitadel.Issuer != "http://localhost:8081" {
+		t.Errorf("Zitadel.Issuer = %q, want http://localhost:8081", cfg.Zitadel.Issuer)
 	}
 }
 
@@ -89,7 +118,10 @@ func TestLoadNamesEveryMissingVariable(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted an empty environment")
 	}
-	for _, name := range []string{"EDITY_SITES_FILE", "EDITY_PUBLISHER_GITHUB_APP_ID", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY"} {
+	for _, name := range []string{
+		"EDITY_SITES_FILE", "EDITY_PUBLISHER_GITHUB_APP_ID", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY",
+		"EDITY_ZITADEL_ISSUER", "EDITY_ZITADEL_CLIENT_ID", "EDITY_SESSION_KEY",
+	} {
 		if !strings.Contains(err.Error(), name+": not set") {
 			t.Errorf("Load error = %q, want it to say %s is not set", err, name)
 		}
@@ -108,6 +140,11 @@ func TestLoadRejectsABadVariable(t *testing.T) {
 		{"App ID swapped with the key", "EDITY_PUBLISHER_GITHUB_APP_ID", notAKey, "EDITY_PUBLISHER_GITHUB_APP_ID: not a GitHub App ID"},
 		{"key not PEM", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not a PEM private key"},
 		{"key not RSA", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY", notAKey, "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY: not an RSA private key"},
+		{"issuer not a URL", "EDITY_ZITADEL_ISSUER", "zitadel.example.com", "EDITY_ZITADEL_ISSUER: not an https URL"},
+		{"issuer over http", "EDITY_ZITADEL_ISSUER", "http://zitadel.example.com", "EDITY_ZITADEL_ISSUER: not an https URL"},
+		{"issuer with a query", "EDITY_ZITADEL_ISSUER", "https://zitadel.example.com?a=b", "EDITY_ZITADEL_ISSUER: not an https URL"},
+		{"session key not base64", "EDITY_SESSION_KEY", "c2VjcmV0LWtleS1ieXRlcw==!", "EDITY_SESSION_KEY: not 32 bytes in base64"},
+		{"session key too short", "EDITY_SESSION_KEY", "c2VjcmV0LWtleS1ieXRlcw==", "EDITY_SESSION_KEY: not 32 bytes in base64"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,6 +171,9 @@ func validEnv(t *testing.T) map[string]string {
 		"EDITY_SITES_FILE":                       writeFile(t, sandbox),
 		"EDITY_PUBLISHER_GITHUB_APP_ID":          "123456",
 		"EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY": pkcs1(newKey(t)),
+		"EDITY_ZITADEL_ISSUER":                   "https://zitadel.example.com",
+		"EDITY_ZITADEL_CLIENT_ID":                "337@edity",
+		"EDITY_SESSION_KEY":                      base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
 	}
 }
 

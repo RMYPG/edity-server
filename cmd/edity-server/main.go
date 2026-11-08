@@ -14,6 +14,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/config"
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/issues"
+	"github.com/RMYPG/edity-server/internal/login"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/publish"
 	"github.com/RMYPG/edity-server/internal/server"
@@ -43,9 +44,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	repository := func(r site.Repository) *github.Repo { return publisher.Repo(r.Owner, r.Name) }
 	reporter := issues.New(repository, publisher.BotLogin, logger)
 	tracker := progress.New(repository, publisher.BotLogin, reporter)
+	zitadel, err := login.New(login.Options{Issuer: cfg.Zitadel.Issuer, ClientID: cfg.Zitadel.ClientID, Key: cfg.SessionKey})
+	if err != nil {
+		return err
+	}
 	services := server.Services{
-		// No Client can log in before ticket 25, so every Publish gets 401.
-		Sessions:  server.NoSessions{},
+		Sessions:  zitadel,
+		Login:     zitadel,
 		Publisher: publish.New(repository, publisher.BotLogin),
 		Reporter:  reporter,
 		Tracker:   tracker,

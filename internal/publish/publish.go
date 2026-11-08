@@ -80,6 +80,8 @@ type Client struct {
 	// Name is the Client's name in Zitadel, which the commit's Edity-Client
 	// trailer carries.
 	Name string
+	// Locale is the Client's locale, which the Editor's language follows (N6).
+	Locale string
 }
 
 // A Draft is the Changes a Client publishes on one page.

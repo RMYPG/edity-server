@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/RMYPG/edity-server/internal/apitest"
+	"github.com/RMYPG/edity-server/internal/login"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -148,15 +149,18 @@ func TestEachRequestIsLoggedAsOneJSONLine(t *testing.T) {
 	req.Host = "unknown.example.com"
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	// A refused login adds a line of its own.
+	lines := slices.DeleteFunc(strings.Split(strings.TrimSpace(logs.String()), "\n"), func(line string) bool {
+		return !strings.Contains(line, `"msg":"request"`)
+	})
 	if len(lines) != 2 {
-		t.Fatalf("got %d log lines, want 2:\n%s", len(lines), logs.String())
+		t.Fatalf("got %d request lines, want 2:\n%s", len(lines), logs.String())
 	}
 	if strings.Contains(logs.String(), "secret-code") {
 		t.Errorf("the log leaks the query string:\n%s", logs.String())
 	}
 	want := []map[string]any{
-		{"msg": "request", "method": "GET", "path": "/_edity/api/auth/callback", "host": "sandbox.example.com", "site": "edity-sandbox", "status": 501.0},
+		{"msg": "request", "method": "GET", "path": "/_edity/api/auth/callback", "host": "sandbox.example.com", "site": "edity-sandbox", "status": 400.0},
 		{"msg": "request", "method": "POST", "path": "/_edity/api/publish", "host": "unknown.example.com", "status": 404.0},
 	}
 	for i, line := range lines {
@@ -192,5 +196,10 @@ func newServer(t *testing.T, logs io.Writer) http.Handler {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	return server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)), server.Services{})
+	// These tests never get as far as asking Zitadel anything.
+	zitadel, err := login.New(login.Options{Issuer: "https://zitadel.invalid", ClientID: "337@edity", Key: sessionKey})
+	if err != nil {
+		t.Fatalf("login.New: %v", err)
+	}
+	return server.New(sites, slog.New(slog.NewJSONHandler(logs, nil)), server.Services{Login: zitadel})
 }

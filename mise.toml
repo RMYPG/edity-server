@@ -14,6 +14,14 @@ gh = "2.102.0"
 # checkout. The same version as edity's mise.toml.
 node = "24.22.1"
 
+# Placeholders so that mise run dev and the sandbox checks, which read the whole
+# configuration, can start. The login answers 503 until Infisical's dev secrets
+# hold Zitadel's real values, which take the place of these.
+[env]
+EDITY_ZITADEL_ISSUER = "https://zitadel.invalid"
+EDITY_ZITADEL_CLIENT_ID = "dev"
+EDITY_SESSION_KEY = "ZGV2LW9ubHktbm90LWEtc2VjcmV0LXNlc3Npb24ta2U="
+
 [tasks.lint]
 description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
 run = [

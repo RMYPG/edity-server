@@ -65,6 +65,9 @@ jobs:
             --env EDITY_SITES_FILE=/etc/edity-server/sites.json \
             --env EDITY_PUBLISHER_GITHUB_APP_ID=1 \
             --env EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)" \
+            --env EDITY_ZITADEL_ISSUER=https://zitadel.invalid \
+            --env EDITY_ZITADEL_CLIENT_ID=ci \
+            --env EDITY_SESSION_KEY="$(openssl rand -base64 32)" \
             edity-server:ci
           # Until the server listens, Docker's port proxy accepts a connection and
           # resets it, which --retry-connrefused doesn't cover.

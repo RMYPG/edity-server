@@ -24,16 +24,16 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
-// Sessions tells which Client a request's session is for. Logging in
-// through Zitadel (ticket 25) implements it.
+// Sessions tells which Client a request's session is for. *login.Zitadel is
+// one.
 type Sessions interface {
 	// Client returns the Client of the session r carries for s, and false
 	// when r carries none, or an expired one.
 	Client(r *http.Request, s site.Site) (publish.Client, bool)
 }
 
-// NoSessions is Sessions while no Client can log in: no request has a
-// session.
+// NoSessions is Sessions for a server no Client can log in to: no request
+// has a session.
 type NoSessions struct{}
 
 // Client returns false.

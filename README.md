@@ -22,7 +22,7 @@ Run the checks CI runs, the Go, OpenAPI and workflow linters and the tests, with
 mise run ci
 ```
 
-`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`.
+`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`. Until those secrets hold Zitadel's values, the placeholders in `mise.toml` let it start, and `/_edity/login` answers 503.
 
 `mise run check:sandbox` publishes on `RMYPG/edity-sandbox` for real, with the same secrets: it changes a Field, waits for the Release, and puts it back, so it makes two commits on the sandbox's `main` and two Releases. It also checks that a Conflict and a broken Limit commit nothing. It takes as long as two runs of the sandbox's CI, and is not part of `mise run ci`.
 
@@ -44,6 +44,9 @@ The server reads its environment at startup and refuses to start if a variable i
 | `EDITY_SITES_FILE` | Path of the Sites file |
 | `EDITY_PUBLISHER_GITHUB_APP_ID` | ID of the `edity-publisher` GitHub App |
 | `EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY` | Its private key, in PEM |
+| `EDITY_ZITADEL_ISSUER` | URL of the Zitadel instance Clients log in through, over `https` (or `http` on a loopback hostname) |
+| `EDITY_ZITADEL_CLIENT_ID` | ID of the server's OIDC client on it |
+| `EDITY_SESSION_KEY` | 32 random bytes in base64, such as `openssl rand -base64 32`, that seal the Clients' sessions |
 
 The Sites file lists every Site the server works for. A request whose hostname is not listed gets 404 on every `/_edity/` route.
 
@@ -64,7 +67,24 @@ The Sites file lists every Site the server works for. A request whose hostname i
 
 The server refuses to start on a Sites file it can't read unambiguously: unknown or repeated keys (in any letter case), anything after the JSON document, or a Site field that is missing or malformed. `githubRepository` follows GitHub's naming rules, `locale` is a BCP 47 tag such as `es` or `es-ES`, `zitadelRole` has no spaces, and the namespace and Deployment are valid Kubernetes names.
 
-`GET /healthz` answers Kubernetes probes on any hostname. Of the spec's API, `POST /_edity/api/publish` and `GET /_edity/api/publish/{sha}` are implemented, and the other routes answer 501 until they are. No Client can log in before the Zitadel login exists, so every Publish gets 401 for now. Logs are JSON lines on stdout, one per request.
+`GET /healthz` answers Kubernetes probes on any hostname. Logs are JSON lines on stdout, one per request.
+
+## Login
+
+A Client logs in through Zitadel with OIDC's authorization code flow and PKCE. `GET /_edity/login` redirects to Zitadel, and `GET /_edity/api/auth/callback` checks the login and that the person has the Site's role (`zitadelRole` in the Sites file). The server reads their name, locale and roles from Zitadel's userinfo endpoint. Someone without the role gets 403 and no session.
+
+Zitadel needs, in the Edity project:
+
+- a role per Site, `site:<id>`, granted to the Site's Clients, and
+- a web application with the PKCE authentication method, so with no client secret, whose redirect URIs list `https://<hostname>/_edity/api/auth/callback` for each hostname of each Site.
+
+A session is the `edity_session` cookie, `HttpOnly` and `SameSite=Strict` on `/_edity/api`, for 30 days, encrypted and authenticated with `EDITY_SESSION_KEY`. The `edity=1` marker lives as long and tells the page's inline check to load the Editor. The server stores no session, so:
+
+- A session survives a restart, as long as the key stays the same. Changing the key logs every Client out.
+- A session is checked against its Site, so one Site's cookie is worth nothing on another.
+- Logging out clears the browser's cookies, and a removed role is noticed at the next login. Until then a session that was copied, or whose Client lost the role, lasts until it expires.
+
+Every API call but the callback refuses another origin (A4): `POST` must carry an `Origin` that is one of the Site's, and `GET` may carry none.
 
 ## Publish
 
