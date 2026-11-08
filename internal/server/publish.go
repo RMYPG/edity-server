@@ -25,12 +25,19 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
-// Sessions tells which Client a request's session is for. *login.Zitadel is
+// Sessions tells which Client a request's session is for, and whether that
+// Client still holds the Site's role, which a session can outlive. There is
+// no Sessions without the check, so no server can skip it. *login.Zitadel is
 // one.
 type Sessions interface {
 	// Client returns the Client of the session r carries for s, and false
 	// when r carries none, or an expired one.
 	Client(r *http.Request, s site.Site) (publish.Client, bool)
+	// HoldsRole asks whether c still holds s's role. Its error means that it
+	// could not tell.
+	HoldsRole(ctx context.Context, s site.Site, c publish.Client) (bool, error)
+	// Logout clears the session's cookies.
+	Logout(w http.ResponseWriter, r *http.Request)
 }
 
 // NoSessions is Sessions for a server no Client can log in to: no request
@@ -41,6 +48,14 @@ type NoSessions struct{}
 func (NoSessions) Client(*http.Request, site.Site) (publish.Client, bool) {
 	return publish.Client{}, false
 }
+
+// HoldsRole returns false: with no session, there is no one to hold a role.
+func (NoSessions) HoldsRole(context.Context, site.Site, publish.Client) (bool, error) {
+	return false, nil
+}
+
+// Logout does nothing: there is no session to end.
+func (NoSessions) Logout(http.ResponseWriter, *http.Request) {}
 
 // A Publisher publishes a Draft on a Site. *publish.Publisher is one.
 type Publisher interface {
@@ -113,14 +128,17 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not a Publish: "+err.Error()+".", http.StatusBadRequest)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), publishTimeout)
+	defer cancel()
+	if !h.holdsRole(ctx, w, r, s, client) {
+		return
+	}
 	if wait, ok := h.limit.take(s.ID); !ok {
 		w.Header().Set("Retry-After", seconds(wait))
 		http.Error(w, "The Site has published too often lately.", http.StatusTooManyRequests)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), publishTimeout)
-	defer cancel()
 	published, err := h.publisher.Publish(ctx, s, draft, client)
 	if err != nil {
 		h.fail(w, r, s, err)
@@ -140,6 +158,25 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Apart from the Publish, which it neither delays nor fails.
 		go h.report(context.WithoutCancel(r.Context()), s, published)
 	}
+}
+
+// holdsRole tells whether client still holds s's role, asking Zitadel, and
+// answers r when it does not, or when Zitadel can't say. A Publish never goes
+// through on a role that may be gone.
+func (h *publishHandler) holdsRole(ctx context.Context, w http.ResponseWriter, r *http.Request, s site.Site, client publish.Client) bool {
+	held, err := h.sessions.HoldsRole(ctx, s, client)
+	if err != nil {
+		h.logger.LogAttrs(r.Context(), slog.LevelError, "role check failed", slog.String("site", s.ID), slog.String("error", err.Error()))
+		http.Error(w, "Zitadel could not be reached: publish again later.", http.StatusServiceUnavailable)
+		return false
+	}
+	if !held {
+		h.logger.LogAttrs(r.Context(), slog.LevelInfo, "session ended: the Site's role is gone", slog.String("site", s.ID))
+		h.sessions.Logout(w, r)
+		http.Error(w, "The session's Client no longer holds the Site's role: log in again.", http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 // report reports the Developer commits that published ships, if any.

@@ -106,6 +106,10 @@ type Options struct {
 	ClientID string
 	// Key seals the cookies, 32 bytes.
 	Key []byte
+	// ProjectID is the Edity project, where each Site has its role.
+	ProjectID string
+	// ServiceUser is who the server asks Zitadel about roles as.
+	ServiceUser ServiceUser
 	// HTTP is how the server calls Zitadel. A client with a 10-second
 	// timeout when it is nil.
 	HTTP *http.Client
@@ -117,19 +121,31 @@ type Options struct {
 // endpoints the first time it needs them, so the server starts, and serves
 // everything else, while Zitadel can't be reached.
 type Zitadel struct {
-	issuer   string
-	clientID string
-	sealer   sealer
-	client   *http.Client
-	now      func() time.Time
+	issuer      string
+	clientID    string
+	projectID   string
+	serviceUser ServiceUser
+	sealer      sealer
+	client      *http.Client
+	// api calls Zitadel as the service user. It follows no redirect, so that
+	// the service user's credentials go nowhere but to Zitadel.
+	api *http.Client
+	now func() time.Time
 
 	mu       sync.Mutex
 	provider *oidc.Provider
+
+	tokenMu      sync.Mutex
+	token        string
+	tokenExpires time.Time
 }
 
-// New returns a Zitadel. Its error says only that the key is wrong: the key
-// is never in it.
+// New returns a Zitadel. Its error says only that the key is wrong, or that
+// the service user is missing: no key is ever in it.
 func New(o Options) (*Zitadel, error) {
+	if o.ProjectID == "" || o.ServiceUser.ID == "" || o.ServiceUser.KeyID == "" || o.ServiceUser.Key == nil {
+		return nil, errors.New("the Edity project or the Zitadel service user is missing")
+	}
 	block, err := aes.NewCipher(o.Key)
 	if err != nil {
 		return nil, fmt.Errorf("the session key is not an AES key: %d bytes", len(o.Key))
@@ -138,10 +154,16 @@ func New(o Options) (*Zitadel, error) {
 	if err != nil {
 		return nil, err
 	}
-	z := &Zitadel{issuer: o.Issuer, clientID: o.ClientID, sealer: sealer{aead}, client: o.HTTP, now: o.Now}
+	z := &Zitadel{
+		issuer: o.Issuer, clientID: o.ClientID, projectID: o.ProjectID, serviceUser: o.ServiceUser,
+		sealer: sealer{aead}, client: o.HTTP, now: o.Now,
+	}
 	if z.client == nil {
 		z.client = &http.Client{Timeout: 10 * time.Second}
 	}
+	api := *z.client
+	api.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	z.api = &api
 	if z.now == nil {
 		z.now = time.Now
 	}

@@ -57,6 +57,12 @@ func (cookieSessions) Client(r *http.Request, _ site.Site) (publish.Client, bool
 	return publish.Client{Name: "Ana García"}, true
 }
 
+func (cookieSessions) HoldsRole(context.Context, site.Site, publish.Client) (bool, error) {
+	return true, nil
+}
+
+func (cookieSessions) Logout(http.ResponseWriter, *http.Request) {}
+
 // fakePublisher records what it is asked to publish, and answers as told.
 type fakePublisher struct {
 	mu        sync.Mutex

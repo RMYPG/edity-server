@@ -57,9 +57,11 @@ func (lt *loginTest) start() {
 	if err != nil {
 		lt.t.Fatal(err)
 	}
+	lt.zitadel.Now = func() time.Time { return lt.now }
 	zitadel, err := login.New(login.Options{
-		Issuer: lt.zitadel.Issuer(), ClientID: clientID, Key: lt.key,
-		Now: func() time.Time { return lt.now },
+		Issuer: lt.zitadel.Issuer(), ClientID: clientID, Key: lt.key, ProjectID: oidctest.ProjectID,
+		ServiceUser: login.ServiceUser{ID: oidctest.ServiceUserID, KeyID: oidctest.ServiceKeyID, Key: oidctest.ServiceKey()},
+		Now:         func() time.Time { return lt.now },
 	})
 	if err != nil {
 		lt.t.Fatal(err)
@@ -270,8 +272,7 @@ func TestALoginWithoutTheRoleEndsTheSessionTheBrowserHad(t *testing.T) {
 
 func TestASessionKnowsWhoLoggedIn(t *testing.T) {
 	lt := newLoginTest(t)
-	b := lt.browser("sandbox.example.com")
-	b.logIn(ana, "/_edity/login")
+	b := lt.withRole()
 
 	if rec := b.publish(); rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)

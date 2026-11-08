@@ -13,6 +13,7 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/apitest"
 	"github.com/RMYPG/edity-server/internal/login"
+	"github.com/RMYPG/edity-server/internal/oidctest"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -197,7 +198,10 @@ func newServer(t *testing.T, logs io.Writer) http.Handler {
 		t.Fatalf("Parse: %v", err)
 	}
 	// These tests never get as far as asking Zitadel anything.
-	zitadel, err := login.New(login.Options{Issuer: "https://zitadel.invalid", ClientID: "337@edity", Key: sessionKey})
+	zitadel, err := login.New(login.Options{
+		Issuer: "https://zitadel.invalid", ClientID: "337@edity", Key: sessionKey, ProjectID: oidctest.ProjectID,
+		ServiceUser: login.ServiceUser{ID: oidctest.ServiceUserID, KeyID: oidctest.ServiceKeyID, Key: oidctest.ServiceKey()},
+	})
 	if err != nil {
 		t.Fatalf("login.New: %v", err)
 	}
