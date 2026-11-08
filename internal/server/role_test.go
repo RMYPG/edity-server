@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -110,5 +111,131 @@ func TestAPublishNeverRemembersZitadelsAnswer(t *testing.T) {
 	}
 	if got := len(lt.zitadel.ListRequests()); got != 2 {
 		t.Errorf("%d ListAuthorizations calls, want one per Publish", got)
+	}
+}
+
+func TestAPublishEndsTheSessionUnlessAnActiveAuthorizationHoldsTheRole(t *testing.T) {
+	deactivated := anasRole
+	deactivated.Inactive = true
+	inAnotherProject := anasRole
+	inAnotherProject.ProjectID = "340000000000000999"
+	someoneElses := anasRole
+	someoneElses.UserID = "9999"
+	for name, authorization := range map[string]oidctest.Authorization{
+		"deactivated":         deactivated,
+		"another Site's role": {UserID: ana.Subject, ProjectID: oidctest.ProjectID, Roles: []string{"site:fisioindoor"}},
+		"a longer role":       {UserID: ana.Subject, ProjectID: oidctest.ProjectID, Roles: []string{"site:edity-sandbox-2"}},
+		"no roles":            {UserID: ana.Subject, ProjectID: oidctest.ProjectID},
+		"in another project":  inAnotherProject,
+		"someone else's":      someoneElses,
+	} {
+		for _, ignoreFilters := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, ignoring filters %v", name, ignoreFilters), func(t *testing.T) {
+				lt := newLoginTest(t)
+				b := lt.withRole()
+				lt.zitadel.IgnoreFilters = ignoreFilters
+				lt.zitadel.SetAuthorizations(authorization)
+
+				rec := b.publish()
+
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusUnauthorized, rec.Body)
+				}
+				if lt.publisher.calls() != 0 {
+					t.Errorf("committed %d times, want none", lt.publisher.calls())
+				}
+				sessionEnded(t, b, rec)
+			})
+		}
+	}
+}
+
+func TestAPublishGoesThroughOnAnActiveAuthorizationAmongOthers(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	deactivated := anasRole
+	deactivated.Inactive = true
+	bothRoles := anasRole
+	bothRoles.Roles = []string{"site:fisioindoor", "site:edity-sandbox"}
+	lt.zitadel.SetAuthorizations(deactivated, bothRoles)
+
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+}
+
+// sessionKept fails t unless rec left the session as it was, and the browser
+// is still logged in.
+func sessionKept(t *testing.T, b *browser, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, name := range []string{"edity_session", "edity"} {
+		if c := responseCookie(t, rec, name); c != nil {
+			t.Errorf("the response changes the cookie %s: %+v", name, c)
+		}
+	}
+	if rec := b.session(); rec.Code != http.StatusOK {
+		t.Errorf("GET session: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAPublishGets503AndCommitsNothingWhenZitadelCanNotAnswer(t *testing.T) {
+	for name, fail := range map[string]func(z *oidctest.Provider){
+		"Zitadel is down":                              func(z *oidctest.Provider) { z.Stop() },
+		"the token endpoint fails":                     func(z *oidctest.Provider) { z.TokenStatus = http.StatusInternalServerError },
+		"the token endpoint refuses":                   func(z *oidctest.Provider) { z.TokenStatus = http.StatusBadRequest },
+		"the list fails":                               func(z *oidctest.Provider) { z.ListStatus = http.StatusInternalServerError },
+		"the list is refused":                          func(z *oidctest.Provider) { z.ListStatus = http.StatusForbidden },
+		"the list is not there":                        func(z *oidctest.Provider) { z.ListStatus = http.StatusNotFound },
+		"an answer that is not JSON":                   func(z *oidctest.Provider) { z.ListBody = "<html>Bad gateway</html>" },
+		"an answer that is no list":                    func(z *oidctest.Provider) { z.ListBody = "{}" },
+		"a list without the service user's permission": func(z *oidctest.Provider) { z.Unreadable = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			lt := newLoginTest(t)
+			b := lt.withRole()
+			fail(lt.zitadel)
+
+			rec := b.publish()
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+			}
+			if lt.publisher.calls() != 0 {
+				t.Errorf("committed %d times, want none", lt.publisher.calls())
+			}
+			sessionKept(t, b, rec)
+		})
+	}
+}
+
+func TestAPublishGets503WhenZitadelGoesDownAfterItsFirstAnswer(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Fatalf("first Publish: status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+	lt.zitadel.Stop()
+
+	rec := b.publish()
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("second Publish: status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+	}
+	if lt.publisher.calls() != 1 {
+		t.Errorf("committed %d times, want only the first Publish", lt.publisher.calls())
+	}
+}
+
+func TestAPublishGoesThroughAgainOnceZitadelAnswers(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	lt.zitadel.ListStatus = http.StatusInternalServerError
+	if rec := b.publish(); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("while Zitadel fails: status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+	}
+	lt.zitadel.ListStatus = 0
+
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Errorf("once it answers: status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
 	}
 }

@@ -91,6 +91,13 @@ type Provider struct {
 	// ListBody, when it is set, is the body ListAuthorizations answers 200
 	// with.
 	ListBody string
+	// IgnoreFilters makes ListAuthorizations answer every authorization,
+	// whatever it was asked.
+	IgnoreFilters bool
+	// Unreadable makes ListAuthorizations answer as Zitadel answers a caller
+	// without user.grant.read: it drops the authorizations it finds from the
+	// list, and still counts them.
+	Unreadable bool
 
 	clientID string
 	key      *rsa.PrivateKey
@@ -520,9 +527,13 @@ func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
 	}
 	var found []map[string]any
 	for _, a := range all {
-		if request.matches(a) {
+		if p.IgnoreFilters || request.matches(a) {
 			found = append(found, wireAuthorization(a))
 		}
+	}
+	if p.Unreadable {
+		writeJSON(w, http.StatusOK, listAnswer(len(found), nil))
+		return
 	}
 	writeJSON(w, http.StatusOK, listAnswer(len(found), found))
 }
