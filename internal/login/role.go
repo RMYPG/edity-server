@@ -59,6 +59,11 @@ type ServiceUser struct {
 // Its error means that Zitadel gave no answer, which says nothing about the
 // role.
 func (z *Zitadel) HoldsRole(ctx context.Context, s site.Site, c publish.Client) (bool, error) {
+	if c.ID == "" {
+		// A session sealed before sessions carried the user ID. Zitadel can't
+		// be asked about it, and logging in again gives it one.
+		return false, nil
+	}
 	token, err := z.accessToken(ctx, "")
 	if err != nil {
 		return false, err

@@ -72,6 +72,7 @@ type fakePublisher struct {
 	published publish.Published
 	err       error
 	ctxOK     bool
+	deadline  time.Time
 }
 
 func (p *fakePublisher) Publish(ctx context.Context, s site.Site, d publish.Draft, c publish.Client) (publish.Published, error) {
@@ -80,7 +81,8 @@ func (p *fakePublisher) Publish(ctx context.Context, s site.Site, d publish.Draf
 	p.drafts = append(p.drafts, d)
 	p.sites = append(p.sites, s.ID)
 	p.clients = append(p.clients, c)
-	_, hasDeadline := ctx.Deadline()
+	deadline, hasDeadline := ctx.Deadline()
+	p.deadline = deadline
 	p.ctxOK = ctx.Err() == nil && hasDeadline
 	return p.published, p.err
 }

@@ -91,6 +91,8 @@ type Provider struct {
 	// ListBody, when it is set, is the body ListAuthorizations answers 200
 	// with.
 	ListBody string
+	// Hang makes ListAuthorizations answer nothing until the caller gives up.
+	Hang bool
 	// IgnoreFilters makes ListAuthorizations answer every authorization,
 	// whatever it was asked.
 	IgnoreFilters bool
@@ -507,6 +509,10 @@ func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
 	all := slices.Clone(p.authorizations)
 	expires, known := p.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 	p.mu.Unlock()
+	if p.Hang {
+		<-r.Context().Done()
+		return
+	}
 	if p.ListStatus != 0 {
 		writeJSON(w, p.ListStatus, map[string]string{"code": "internal", "message": "failing"})
 		return

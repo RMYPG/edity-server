@@ -77,6 +77,10 @@ const maxPublishBody = 1 << 20
 // way is not cut off.
 const publishTimeout = 50 * time.Second
 
+// roleCheckTimeout bounds asking Zitadel about the Client's role, within
+// publishTimeout. It covers the access token too, when one is due.
+const roleCheckTimeout = 5 * time.Second
+
 // busyRetry is how long a Client waits to publish again after main kept
 // moving under a Publish.
 const busyRetry = 10 * time.Second
@@ -164,6 +168,8 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // answers r when it does not, or when Zitadel can't say. A Publish never goes
 // through on a role that may be gone.
 func (h *publishHandler) holdsRole(ctx context.Context, w http.ResponseWriter, r *http.Request, s site.Site, client publish.Client) bool {
+	ctx, cancel := context.WithTimeout(ctx, roleCheckTimeout)
+	defer cancel()
 	held, err := h.sessions.HoldsRole(ctx, s, client)
 	if err != nil {
 		h.logger.LogAttrs(r.Context(), slog.LevelError, "role check failed", slog.String("site", s.ID), slog.String("error", err.Error()))

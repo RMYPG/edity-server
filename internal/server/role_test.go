@@ -1,17 +1,25 @@
 package server_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/oidctest"
+	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/server"
+	"github.com/RMYPG/edity-server/internal/site"
 )
 
 // anasRole is Ana's role assignment on edity-sandbox.
@@ -347,5 +355,138 @@ func TestAPublishWithAKeyZitadelDoesNotKnowGets503(t *testing.T) {
 	}
 	if got := lt.zitadel.AccessTokensIssued(); got != 0 {
 		t.Errorf("%d access tokens issued, want none", got)
+	}
+}
+
+// roleSessions is cookieSessions, whose Client holds the Site's role as told.
+type roleSessions struct {
+	cookieSessions
+
+	mu       sync.Mutex
+	held     bool
+	err      error
+	calls    int
+	ended    int
+	deadline time.Time
+	alive    bool
+}
+
+func (s *roleSessions) HoldsRole(ctx context.Context, _ site.Site, _ publish.Client) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.deadline, _ = ctx.Deadline()
+	s.alive = ctx.Err() == nil
+	return s.held, s.err
+}
+
+func (s *roleSessions) Logout(http.ResponseWriter, *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended++
+}
+
+func (s *roleSessions) hold(held bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held, s.err = held, err
+}
+
+func TestAPublishIsCheckedOnlyOnceItIsValidated(t *testing.T) {
+	for name, send := range map[string]struct {
+		body string
+		edit func(*http.Request)
+	}{
+		"not a Draft":     {body: `{"page":"home"}`},
+		"not JSON":        {body: draft, edit: func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }},
+		"from elsewhere":  {body: draft, edit: func(r *http.Request) { r.Header.Set("Origin", "https://evil.example.com") }},
+		"without session": {body: draft, edit: func(r *http.Request) { r.Header.Del("Cookie") }},
+		"too large":       {body: `{"page":"` + strings.Repeat("a", 1<<20) + `","changes":[]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sessions := &roleSessions{held: true}
+
+			rec := post(t, publishServer(t, sessions, &fakePublisher{}, server.RateLimit{}), send.body, send.edit)
+
+			if rec.Code < 400 || rec.Code >= 500 {
+				t.Errorf("status = %d, want a 4xx: %s", rec.Code, rec.Body)
+			}
+			if sessions.calls != 0 {
+				t.Errorf("asked about the role %d times, want none", sessions.calls)
+			}
+		})
+	}
+}
+
+func TestAPublishTheRoleCheckRefusesTakesNothingFromTheRateLimit(t *testing.T) {
+	sessions := &roleSessions{}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}}
+	h := publishServer(t, sessions, p, server.RateLimit{Burst: 1, Every: time.Hour})
+
+	if rec := post(t, h, draft, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("role gone: status = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	sessions.hold(false, errors.New("Zitadel is down"))
+	if rec := post(t, h, draft, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Zitadel down: status = %d, want 503: %s", rec.Code, rec.Body)
+	}
+	if p.calls() != 0 {
+		t.Fatalf("committed %d times, want none", p.calls())
+	}
+
+	sessions.hold(true, nil)
+	if rec := post(t, h, draft, nil); rec.Code != http.StatusAccepted {
+		t.Errorf("role held: status = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if rec := post(t, h, draft, nil); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("the next Publish: status = %d, want 429: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAPublishWithoutTheRoleGets401EvenPastTheRateLimit(t *testing.T) {
+	sessions := &roleSessions{held: true}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}}
+	h := publishServer(t, sessions, p, server.RateLimit{Burst: 1, Every: time.Hour})
+	post(t, h, draft, nil)
+	sessions.hold(false, nil)
+
+	rec := post(t, h, draft, nil)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	if sessions.ended != 1 {
+		t.Errorf("ended the session %d times, want once", sessions.ended)
+	}
+}
+
+func TestTheRoleCheckIsBoundedShortlyWithinThePublish(t *testing.T) {
+	sessions := &roleSessions{held: true}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}}
+
+	post(t, publishServer(t, sessions, p, server.RateLimit{}), draft, nil)
+
+	left := time.Until(sessions.deadline)
+	if left <= 0 || left > 5*time.Second {
+		t.Errorf("the check had %v left, want at most 5 seconds", left)
+	}
+	if !sessions.deadline.Before(p.deadline) {
+		t.Errorf("the check's deadline %v is not before the Publish's %v", sessions.deadline, p.deadline)
+	}
+	if time.Until(p.deadline) > time.Minute {
+		t.Errorf("the Publish had %v left, want it inside the server's write timeout", time.Until(p.deadline))
+	}
+}
+
+func TestTheRoleCheckGoesOnWhenTheBrowserGoesAway(t *testing.T) {
+	sessions := &roleSessions{held: true}
+	p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	post(t, publishServer(t, sessions, p, server.RateLimit{}), draft, func(r *http.Request) { *r = *r.WithContext(ctx) })
+
+	if !sessions.alive || !p.ctxOK {
+		t.Errorf("the check's context alive = %v, the Publish's = %v, want both", sessions.alive, p.ctxOK)
 	}
 }
