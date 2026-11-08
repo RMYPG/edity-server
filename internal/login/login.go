@@ -219,7 +219,9 @@ func (z *Zitadel) Start(w http.ResponseWriter, r *http.Request, s site.Site) (st
 
 // A session is a logged-in Client of one Site, which its cookie holds.
 type session struct {
-	Site    string    `json:"site"`
+	Site string `json:"site"`
+	// Subject is the person's user ID in Zitadel.
+	Subject string    `json:"subject"`
 	Name    string    `json:"name"`
 	Locale  string    `json:"locale"`
 	Expires time.Time `json:"expires"`
@@ -265,7 +267,7 @@ func (z *Zitadel) Finish(w http.ResponseWriter, r *http.Request, s site.Site) (s
 
 	sealed, err := z.sealer.seal(sessionCookie.name, session{
 		// A Client with no preferred language in Zitadel has no locale.
-		Site: s.ID, Name: who.Name, Locale: cmp.Or(who.Locale, s.Locale), Expires: z.now().Add(sessionLifetime),
+		Site: s.ID, Subject: who.Subject, Name: who.Name, Locale: cmp.Or(who.Locale, s.Locale), Expires: z.now().Add(sessionLifetime),
 	})
 	if err != nil {
 		return "", err
@@ -287,9 +289,10 @@ func (z *Zitadel) readAttempt(r *http.Request, s site.Site) (attempt, bool) {
 
 // A person is who logged in, as Zitadel asserts them.
 type person struct {
-	Name   string                       `json:"name"`
-	Locale string                       `json:"locale"`
-	Roles  map[string]map[string]string `json:"urn:zitadel:iam:org:project:roles"`
+	Subject string                       `json:"sub"`
+	Name    string                       `json:"name"`
+	Locale  string                       `json:"locale"`
+	Roles   map[string]map[string]string `json:"urn:zitadel:iam:org:project:roles"`
 }
 
 // identify exchanges the callback's code and returns who logged in. It reads
@@ -324,6 +327,9 @@ func (z *Zitadel) identify(r *http.Request, s site.Site, a attempt, code string)
 	if info.Subject != id.Subject {
 		return person{}, fmt.Errorf("%w: userinfo is about someone else", ErrNotALogin)
 	}
+	if id.Subject == "" {
+		return person{}, fmt.Errorf("%w: its ID token is about no one", ErrNotALogin)
+	}
 	var who person
 	if err := info.Claims(&who); err != nil {
 		return person{}, fmt.Errorf("%w: its userinfo: %w", ErrNotALogin, err)
@@ -355,7 +361,7 @@ func (z *Zitadel) Client(r *http.Request, s site.Site) (publish.Client, bool) {
 	if !z.sealer.open(sessionCookie.name, c.Value, &sess) || sess.Site != s.ID || !z.now().Before(sess.Expires) {
 		return publish.Client{}, false
 	}
-	return publish.Client{Name: sess.Name, Locale: sess.Locale}, true
+	return publish.Client{ID: sess.Subject, Name: sess.Name, Locale: sess.Locale}, true
 }
 
 // returnPath is the path on the Site that value names, or the Site's home

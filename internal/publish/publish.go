@@ -77,6 +77,9 @@ func backOff(ctx context.Context, attempt int) error {
 
 // A Client is the person who publishes, as their session has them.
 type Client struct {
+	// ID is the Client's user ID in Zitadel, which each Publish asks Zitadel
+	// about (A1).
+	ID string
 	// Name is the Client's name in Zitadel, which the commit's Edity-Client
 	// trailer carries.
 	Name string

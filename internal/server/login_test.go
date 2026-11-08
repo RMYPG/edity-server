@@ -15,6 +15,8 @@ import (
 	"github.com/RMYPG/edity-server/internal/apitest"
 	"github.com/RMYPG/edity-server/internal/login"
 	"github.com/RMYPG/edity-server/internal/oidctest"
+	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/release"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -29,16 +31,20 @@ var ana = oidctest.Person{Subject: "2200", Name: "Ana García", Locale: "es", Ro
 // loginTest is a server of the two Sites, whose Clients log in at a fake
 // Zitadel.
 type loginTest struct {
-	t       *testing.T
-	zitadel *oidctest.Provider
-	now     time.Time
-	key     []byte
-	handler http.Handler
+	t         *testing.T
+	zitadel   *oidctest.Provider
+	publisher *fakePublisher
+	now       time.Time
+	key       []byte
+	handler   http.Handler
 }
 
 func newLoginTest(t *testing.T) *loginTest {
 	t.Helper()
-	lt := &loginTest{t: t, zitadel: oidctest.New(t, clientID), now: time.Now(), key: sessionKey}
+	lt := &loginTest{
+		t: t, zitadel: oidctest.New(t, clientID), now: time.Now(), key: sessionKey,
+		publisher: &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 4, 3}}},
+	}
 	lt.start()
 	return lt
 }
@@ -59,7 +65,7 @@ func (lt *loginTest) start() {
 		lt.t.Fatal(err)
 	}
 	lt.handler = apitest.Handler(lt.t, server.New(sites, slog.New(slog.NewJSONHandler(io.Discard, nil)), server.Services{
-		Sessions: zitadel, Login: zitadel, Publisher: &fakePublisher{}, Tracker: &fakeTracker{},
+		Sessions: zitadel, Login: zitadel, Publisher: lt.publisher, Tracker: &fakeTracker{},
 	}))
 }
 
@@ -136,6 +142,17 @@ func (b *browser) logIn(person oidctest.Person, target string) *httptest.Respons
 func (b *browser) session() *httptest.ResponseRecorder {
 	b.lt.t.Helper()
 	return b.get("/_edity/api/session")
+}
+
+// publish sends a Publish from the Site's own page, as the Editor does.
+func (b *browser) publish() *httptest.ResponseRecorder {
+	b.lt.t.Helper()
+	return b.send(http.MethodPost, "/_edity/api/publish", func(r *http.Request) {
+		fromTheSite(r)
+		r.Header.Set("Content-Type", "application/json")
+		r.Body = io.NopCloser(strings.NewReader(draft))
+		r.ContentLength = int64(len(draft))
+	})
 }
 
 func responseCookie(t *testing.T, rec *httptest.ResponseRecorder, name string) *http.Cookie {
@@ -248,6 +265,20 @@ func TestALoginWithoutTheRoleEndsTheSessionTheBrowserHad(t *testing.T) {
 
 	if rec := b.session(); rec.Code != http.StatusUnauthorized {
 		t.Errorf("GET session: status = %d, want 401: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestASessionKnowsWhoLoggedIn(t *testing.T) {
+	lt := newLoginTest(t)
+	b := lt.browser("sandbox.example.com")
+	b.logIn(ana, "/_edity/login")
+
+	if rec := b.publish(); rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+
+	if got := lt.publisher.clients[0].ID; got != ana.Subject {
+		t.Errorf("the Client's ID = %q, want Zitadel's user ID %q", got, ana.Subject)
 	}
 }
 
@@ -425,6 +456,12 @@ func TestWhatIsNotTheEndOfThisBrowsersLoginGetsNoSession(t *testing.T) {
 		},
 		"userinfo about someone else": func(lt *loginTest, b *browser) *httptest.ResponseRecorder {
 			lt.zitadel.EditUserInfo = func(c map[string]any) { c["sub"] = "9999" }
+			return forged(lt, b)
+		},
+		// Each Publish asks Zitadel about the session's user.
+		"no one's ID token and userinfo": func(lt *loginTest, b *browser) *httptest.ResponseRecorder {
+			lt.zitadel.EditIDToken = func(c map[string]any) { delete(c, "sub") }
+			lt.zitadel.EditUserInfo = func(c map[string]any) { delete(c, "sub") }
 			return forged(lt, b)
 		},
 	} {
