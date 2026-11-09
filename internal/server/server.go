@@ -14,7 +14,9 @@ import (
 // Services are what the routes work with.
 type Services struct {
 	// Sessions is NoSessions when it is nil.
-	Sessions  Sessions
+	Sessions Sessions
+	// Login logs Clients in and out.
+	Login     Login
 	Publisher Publisher
 	// Reporter reports what a Publish ships, unless it is nil.
 	Reporter Reporter
@@ -46,14 +48,11 @@ func New(sites *site.Registry, logger *slog.Logger, services Services) http.Hand
 		tracker:  services.Tracker,
 		logger:   logger,
 	})
-	for _, route := range []string{
-		"GET /_edity/login",
-		"GET /_edity/api/auth/callback",
-		"POST /_edity/api/auth/logout",
-		"GET /_edity/api/session",
-	} {
-		api.HandleFunc(route, notImplemented)
-	}
+	login := &loginHandler{login: services.Login, sessions: services.Sessions, logger: logger}
+	api.HandleFunc("GET /_edity/login", login.start)
+	api.HandleFunc("GET /_edity/api/auth/callback", login.finish)
+	api.HandleFunc("POST /_edity/api/auth/logout", login.logout)
+	api.HandleFunc("GET /_edity/api/session", login.session)
 
 	// Everything but the health check goes through the Site lookup before a
 	// ServeMux sees it: a ServeMux redirects a path it would clean, such as
@@ -73,11 +72,6 @@ func New(sites *site.Registry, logger *slog.Logger, services Services) http.Hand
 func health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
-}
-
-// notImplemented answers the routes of the spec that are not built yet.
-func notImplemented(w http.ResponseWriter, _ *http.Request) {
-	http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 }
 
 // failedOnGitHub answers a request that GitHub failed: 503 with GitHub's

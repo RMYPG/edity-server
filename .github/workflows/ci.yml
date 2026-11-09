@@ -60,11 +60,18 @@ jobs:
         run: |
           set -euo pipefail
           trap 'docker logs edity-server' EXIT
+          service_key=$(printf '{"type":"serviceaccount","keyId":"ci","userId":"ci","key":"%s"}' \
+            "$(openssl genrsa 2048 2>/dev/null | awk '{printf "%s\\n", $0}')")
           docker run --detach --name edity-server --publish 8080:8080 \
             --volume "$PWD/sites.dev.json:/etc/edity-server/sites.json:ro" \
             --env EDITY_SITES_FILE=/etc/edity-server/sites.json \
             --env EDITY_PUBLISHER_GITHUB_APP_ID=1 \
             --env EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)" \
+            --env EDITY_ZITADEL_ISSUER=https://zitadel.invalid \
+            --env EDITY_ZITADEL_CLIENT_ID=ci \
+            --env EDITY_ZITADEL_PROJECT_ID=ci \
+            --env EDITY_ZITADEL_SERVICE_KEY="$service_key" \
+            --env EDITY_SESSION_KEY="$(openssl rand -base64 32)" \
             edity-server:ci
           # Until the server listens, Docker's port proxy accepts a connection and
           # resets it, which --retry-connrefused doesn't cover.

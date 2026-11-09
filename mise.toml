@@ -14,6 +14,22 @@ gh = "2.102.0"
 # checkout. The same version as edity's mise.toml.
 node = "24.22.1"
 
+# Placeholders so that mise run dev and the sandbox checks, which read the whole
+# configuration, can start. The login answers 503 until Infisical's dev secrets
+# hold Zitadel's real values, which take the place of these. The session key is
+# new each time: anyone can read a fixed one here, and forge a session on a dev
+# server that holds the publisher's real key. The service key is the key of no
+# user at Zitadel, so a copy of it opens nothing. Making one takes a moment, so
+# mise keeps it, and every mise command does not pay for it. Node, declared
+# above, makes it (tools = true), so nothing but what this file declares is
+# needed, and a failure stops mise instead of leaving an empty key.
+[env]
+EDITY_ZITADEL_ISSUER = "https://zitadel.invalid"
+EDITY_ZITADEL_CLIENT_ID = "dev"
+EDITY_ZITADEL_PROJECT_ID = "dev"
+EDITY_ZITADEL_SERVICE_KEY = { value = '''{{ exec(command=`node -e "const {privateKey: key} = require('node:crypto').generateKeyPairSync('rsa', {modulusLength: 2048, publicKeyEncoding: {type: 'spki', format: 'pem'}, privateKeyEncoding: {type: 'pkcs8', format: 'pem'}}); process.stdout.write(JSON.stringify({type: 'serviceaccount', keyId: 'dev', userId: 'dev', key}))"`, cache_key='edity-server-placeholder-service-key') }}''', tools = true }
+EDITY_SESSION_KEY = "{{ exec(command='head -c 32 /dev/urandom | base64') }}"
+
 [tasks.lint]
 description = "Lint the Go code, the OpenAPI file and the GitHub workflows"
 run = [
@@ -45,7 +61,7 @@ run = "infisical run --env=dev --path=/github -- go test -tags sandbox -run Test
 
 [tasks.dev]
 description = "Run the server locally with the dev secrets, as the Developer's own Infisical user"
-env = { EDITY_SITES_FILE = "sites.dev.json" }
+env = { EDITY_SITES_FILE = "sites.dev.json", EDITY_ADDR = "127.0.0.1:8080" }
 run = "infisical run --env=dev --path=/github -- go run ./cmd/edity-server"
 
 [tasks."record:progress"]

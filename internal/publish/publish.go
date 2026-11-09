@@ -77,9 +77,20 @@ func backOff(ctx context.Context, attempt int) error {
 
 // A Client is the person who publishes, as their session has them.
 type Client struct {
+	// ID is the Client's user ID in Zitadel, which each Publish asks Zitadel
+	// about (A1).
+	ID string
 	// Name is the Client's name in Zitadel, which the commit's Edity-Client
 	// trailer carries.
 	Name string
+	// Locale is the Client's locale, which the Editor's language follows (N6).
+	Locale string
+}
+
+// Named tells whether the Client has a name the Edity-Client trailer can
+// carry, without which no Publish goes through.
+func (c Client) Named() bool {
+	return trailerValue(c.Name) != ""
 }
 
 // A Draft is the Changes a Client publishes on one page.

@@ -103,7 +103,7 @@ func TestTheResponsesTheFileDescribesPass(t *testing.T) {
 		},
 		"a login": {
 			request{method: http.MethodGet, target: "/_edity/login?return=/precios", signedOut: true},
-			response{http.StatusFound, map[string]string{"Location": "https://zitadel.example.com/oauth/v2/authorize"}, ""},
+			response{http.StatusFound, map[string]string{"Location": "https://zitadel.example.com/oauth/v2/authorize", "Set-Cookie": "edity_login=sealed; Path=/_edity/api/auth/callback"}, ""},
 		},
 		"a finished login": {
 			request{method: http.MethodGet, target: "/_edity/api/auth/callback?code=c&state=s", signedOut: true},

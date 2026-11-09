@@ -57,6 +57,12 @@ func (cookieSessions) Client(r *http.Request, _ site.Site) (publish.Client, bool
 	return publish.Client{Name: "Ana García"}, true
 }
 
+func (cookieSessions) HoldsRole(context.Context, site.Site, publish.Client) (bool, error) {
+	return true, nil
+}
+
+func (cookieSessions) Logout(http.ResponseWriter, *http.Request) {}
+
 // fakePublisher records what it is asked to publish, and answers as told.
 type fakePublisher struct {
 	mu        sync.Mutex
@@ -66,6 +72,7 @@ type fakePublisher struct {
 	published publish.Published
 	err       error
 	ctxOK     bool
+	deadline  time.Time
 }
 
 func (p *fakePublisher) Publish(ctx context.Context, s site.Site, d publish.Draft, c publish.Client) (publish.Published, error) {
@@ -74,7 +81,8 @@ func (p *fakePublisher) Publish(ctx context.Context, s site.Site, d publish.Draf
 	p.drafts = append(p.drafts, d)
 	p.sites = append(p.sites, s.ID)
 	p.clients = append(p.clients, c)
-	_, hasDeadline := ctx.Deadline()
+	deadline, hasDeadline := ctx.Deadline()
+	p.deadline = deadline
 	p.ctxOK = ctx.Err() == nil && hasDeadline
 	return p.published, p.err
 }
@@ -235,6 +243,8 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 		"http://sandbox.example.com", "http://sandbox.example.com:80",
 		// Loopback, but none of the Site's hostnames.
 		"http://127.0.0.1:4321", "https://localhost.evil.example.com",
+		// The Site's hostname, on a port the request did not come to.
+		"https://sandbox.example.com:8443",
 	} {
 		p := &fakePublisher{}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
@@ -248,15 +258,32 @@ func TestAPublishFromAnotherOriginGets403(t *testing.T) {
 		}
 	}
 	// One of the Site's hostnames over https, whatever the case of its
-	// host or its port, and localhost over http, as in development.
+	// host, and localhost over http on any port, as in development.
 	for _, origin := range []string{
-		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:8443",
+		"https://sandbox.example.com", "https://Sandbox.Example.com", "https://sandbox.example.com:443",
 		"https://www.sandbox.example.com", "http://localhost:4321", "https://localhost",
 	} {
 		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
 		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) { r.Header.Set("Origin", origin) })
 		if rec.Code != http.StatusAccepted {
 			t.Errorf("Origin %q: status = %d, want 202", origin, rec.Code)
+		}
+	}
+}
+
+func TestAnOriginCountsOnThePortTheRequestCameTo(t *testing.T) {
+	for origin, want := range map[string]int{
+		"https://sandbox.example.com:8443": http.StatusAccepted,
+		"https://sandbox.example.com":      http.StatusForbidden,
+		"https://sandbox.example.com:9443": http.StatusForbidden,
+	} {
+		p := &fakePublisher{published: publish.Published{SHA: "4f9d2c1a7b3e8f60d5a9c2b1e7f40386a5d1c9e2", Version: release.Version{1, 0, 1}}}
+		rec := post(t, publishServer(t, cookieSessions{}, p, server.RateLimit{}), draft, func(r *http.Request) {
+			r.Host = "sandbox.example.com:8443"
+			r.Header.Set("Origin", origin)
+		})
+		if rec.Code != want {
+			t.Errorf("Origin %q: status = %d, want %d", origin, rec.Code, want)
 		}
 	}
 }

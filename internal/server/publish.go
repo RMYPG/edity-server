@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,22 +25,37 @@ import (
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
-// Sessions tells which Client a request's session is for. Logging in
-// through Zitadel (ticket 25) implements it.
+// Sessions tells which Client a request's session is for, and whether that
+// Client still holds the Site's role, which a session can outlive. There is
+// no Sessions without the check, so no server can skip it. *login.Zitadel is
+// one.
 type Sessions interface {
 	// Client returns the Client of the session r carries for s, and false
 	// when r carries none, or an expired one.
 	Client(r *http.Request, s site.Site) (publish.Client, bool)
+	// HoldsRole asks whether c still holds s's role. Its error means that it
+	// could not tell.
+	HoldsRole(ctx context.Context, s site.Site, c publish.Client) (bool, error)
+	// Logout clears the session's cookies.
+	Logout(w http.ResponseWriter, r *http.Request)
 }
 
-// NoSessions is Sessions while no Client can log in: no request has a
-// session.
+// NoSessions is Sessions for a server no Client can log in to: no request
+// has a session.
 type NoSessions struct{}
 
 // Client returns false.
 func (NoSessions) Client(*http.Request, site.Site) (publish.Client, bool) {
 	return publish.Client{}, false
 }
+
+// HoldsRole returns false: with no session, there is no one to hold a role.
+func (NoSessions) HoldsRole(context.Context, site.Site, publish.Client) (bool, error) {
+	return false, nil
+}
+
+// Logout does nothing: there is no session to end.
+func (NoSessions) Logout(http.ResponseWriter, *http.Request) {}
 
 // A Publisher publishes a Draft on a Site. *publish.Publisher is one.
 type Publisher interface {
@@ -60,6 +76,10 @@ const maxPublishBody = 1 << 20
 // runs to the end even if the browser goes away, so that a commit on its
 // way is not cut off.
 const publishTimeout = 50 * time.Second
+
+// roleCheckTimeout bounds asking Zitadel about the Client's role, within
+// publishTimeout. It covers the access token too, when one is due.
+const roleCheckTimeout = 5 * time.Second
 
 // busyRetry is how long a Client waits to publish again after main kept
 // moving under a Publish.
@@ -112,14 +132,17 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not a Publish: "+err.Error()+".", http.StatusBadRequest)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), publishTimeout)
+	defer cancel()
+	if !h.holdsRole(ctx, w, r, s, client) {
+		return
+	}
 	if wait, ok := h.limit.take(s.ID); !ok {
 		w.Header().Set("Retry-After", seconds(wait))
 		http.Error(w, "The Site has published too often lately.", http.StatusTooManyRequests)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), publishTimeout)
-	defer cancel()
 	published, err := h.publisher.Publish(ctx, s, draft, client)
 	if err != nil {
 		h.fail(w, r, s, err)
@@ -139,6 +162,27 @@ func (h *publishHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Apart from the Publish, which it neither delays nor fails.
 		go h.report(context.WithoutCancel(r.Context()), s, published)
 	}
+}
+
+// holdsRole tells whether client still holds s's role, asking Zitadel, and
+// answers r when it does not, or when Zitadel can't say. A Publish never goes
+// through on a role that may be gone.
+func (h *publishHandler) holdsRole(ctx context.Context, w http.ResponseWriter, r *http.Request, s site.Site, client publish.Client) bool {
+	ctx, cancel := context.WithTimeout(ctx, roleCheckTimeout)
+	defer cancel()
+	held, err := h.sessions.HoldsRole(ctx, s, client)
+	if err != nil {
+		h.logger.LogAttrs(r.Context(), slog.LevelError, "role check failed", slog.String("site", s.ID), slog.String("error", err.Error()))
+		http.Error(w, "Zitadel could not be reached: publish again later.", http.StatusServiceUnavailable)
+		return false
+	}
+	if !held {
+		h.logger.LogAttrs(r.Context(), slog.LevelInfo, "session ended: the Site's role is gone", slog.String("site", s.ID))
+		h.sessions.Logout(w, r)
+		http.Error(w, "The session's Client no longer holds the Site's role: log in again.", http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 // report reports the Developer commits that published ships, if any.
@@ -220,11 +264,12 @@ func readDraft(body []byte) (publish.Draft, error) {
 }
 
 // fromSite tells whether r comes from a page of s, by its Origin (A4): one
-// of the Site's hostnames over https, on any port, or over http only for a
-// loopback hostname such as localhost, which a Site has in development
-// (sites.dev.json). The request's own scheme says nothing of the page's:
-// behind Cloudflare Tunnel the server sees every request over http. A
-// browser sends Origin with every POST.
+// of the Site's hostnames over https, on the port r came to, or over http
+// only for a loopback hostname such as localhost, which a Site has in
+// development (sites.dev.json), on any port, as the Site's dev server has
+// its own. The request's own scheme says nothing of the page's: behind
+// Cloudflare Tunnel the server sees every request over http. A browser sends
+// Origin with every POST.
 func fromSite(r *http.Request, s site.Site) bool {
 	origin, err := url.Parse(r.Header.Get("Origin"))
 	if err != nil || origin.Host == "" || origin.Opaque != "" || origin.User != nil ||
@@ -232,16 +277,45 @@ func fromSite(r *http.Request, s site.Site) bool {
 		return false
 	}
 	host := origin.Hostname()
+	loopback := site.IsLoopback(host)
 	switch origin.Scheme {
 	case "https":
 	case "http":
-		if !site.IsLoopback(host) {
+		if !loopback {
 			return false
 		}
 	default:
 		return false
 	}
-	return s.HasHostname(host)
+	return s.HasHostname(host) && (loopback || httpsPort(origin.Host) == httpsPort(r.Host))
+}
+
+// httpsPort is the port of a host with an optional port, "" for https's
+// default, which a browser leaves out.
+func httpsPort(host string) string {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil || port == "443" {
+		return ""
+	}
+	return port
+}
+
+// getFromSite tells whether r, a GET, may be answered (A4). A browser sends
+// an Origin with a fetch from another origin but none with a no-cors GET,
+// such as an <img>'s, whatever page it comes from, so without one
+// Sec-Fetch-Site tells: every browser the Editor runs on sends it (N5), and
+// no script can set it. What sends neither is no browser, and has only its
+// session to show.
+func getFromSite(r *http.Request, s site.Site) bool {
+	if r.Header.Get("Origin") != "" {
+		return fromSite(r, s)
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+		return true
+	default:
+		return false
+	}
 }
 
 type conflict struct {

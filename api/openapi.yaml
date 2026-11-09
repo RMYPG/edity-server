@@ -34,9 +34,9 @@ info:
 
     The routes under `/_edity/api/` other than the login callback refuse a
     request from another origin (A4). A Site's own origins are
-    `https://<hostname>`, on any port, for each of its hostnames, and
-    `http://<hostname>` too when the hostname is a loopback one such as
-    `localhost`, as in development.
+    `https://<hostname>`, on the port the request came to, for each of its
+    hostnames, and `http://<hostname>` too when the hostname is a loopback
+    one such as `localhost`, on any port, as in development.
 
     Sites built with an older Editor keep calling the server, so a change to
     this file keeps the calls of earlier Editors working.
@@ -71,8 +71,9 @@ paths:
       summary: Log in
       description: |
         Starts logging in: redirects to Zitadel, with OIDC's authorization
-        code flow and PKCE (A1). The browser navigates here; the Editor does
-        not fetch it.
+        code flow and PKCE (A1), and asks the person to authenticate there
+        even if Zitadel already has a session for them. The browser navigates
+        here; the Editor does not fetch it.
       security: []
       parameters:
         - name: return
@@ -82,8 +83,8 @@ paths:
             `/precios`, so the Client is back on the page whose Draft they were
             editing (A3). Only a path on the Site's own origin counts: anything
             that could lead elsewhere, such as `//other.example` or
-            `https://other.example/`, counts as left out. The Site's home, `/`,
-            when it is left out.
+            `https://other.example/`, or is longer than 1024 bytes, counts as
+            left out. The Site's home, `/`, when it is left out.
           schema:
             type: string
           example: /precios
@@ -97,8 +98,18 @@ paths:
               schema:
                 type: string
                 format: uri
+            Set-Cookie:
+              description: |
+                The `edity_login` cookie that holds the login under way until
+                Zitadel sends the browser back to `finishLogin`, for 10
+                minutes. It is `HttpOnly` and scoped to the callback.
+              required: true
+              schema:
+                type: string
         '404':
           $ref: '#/components/responses/UnknownSite'
+        '503':
+          $ref: '#/components/responses/ZitadelUnavailable'
 
   /_edity/api/auth/callback:
     get:
@@ -145,28 +156,36 @@ paths:
             Set-Cookie:
               description: |
                 The session cookie `edity_session`, `HttpOnly`, and the marker
-                `edity=1`, both for 30 days (A2). The response has one
-                `Set-Cookie` header for each.
+                `edity=1`, both for 30 days (A2), and clears the login's
+                `edity_login` cookie. The response has one `Set-Cookie` header
+                for each.
               required: true
               schema:
                 type: string
         '400':
           description: |
             Not the end of a login this browser started: its `state` is
-            missing or not this browser's, it has no `code`, or Zitadel
-            answered an `error`. No session.
+            missing or not this browser's, the login took over 10 minutes,
+            it has no `code`, Zitadel answered an `error` or refused the
+            `code`, or what Zitadel answered does not check out. No session.
           content:
             text/plain:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: The person who logged in does not have the Site's role, so is not one of its Clients. No session (A1).
+          description: |
+            The person who logged in does not have the Site's role, so is not
+            one of its Clients, or Zitadel gives them no name, which every
+            Publish records. No session, and any session the browser had is
+            cleared (A1).
           content:
             text/plain:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
           $ref: '#/components/responses/UnknownSite'
+        '503':
+          $ref: '#/components/responses/ZitadelUnavailable'
 
   /_edity/api/auth/logout:
     post:
@@ -238,6 +257,14 @@ paths:
         patch bump of the Site's `package.json`, which a workflow in the
         Site repository then cuts as a Release (V3).
 
+        A session can outlive the Client's role. So once the request is
+        validated, and before it counts against the Site's rate limit, the
+        server asks Zitadel whether the session's Client still holds the
+        Site's role (A1). It remembers no answer, though Zitadel's list
+        trails its writes, so a role removed only just now can still pass.
+        Only a Publish asks: `GET /_edity/api/session` answers from the
+        session alone.
+
         The Release ships everything on `main`. Once it has answered, the
         server reports on an issue of the Site repository the commits since
         the last Release that the edity-publisher GitHub App did not make and
@@ -304,7 +331,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '401':
-          $ref: '#/components/responses/NoSession'
+          description: |
+            No session, or an expired one, or the session's Client no longer
+            holds the Site's role in Zitadel, which ends the session. Nothing
+            was committed. The Client logs in again (A3), where a login
+            without the role is refused.
+          headers:
+            Set-Cookie:
+              description: |
+                Sent only when the role is gone: clears the session cookie
+                `edity_session` and the marker `edity`, with one `Set-Cookie`
+                header for each.
+              schema:
+                type: string
+          content:
+            text/plain:
+              schema:
+                $ref: '#/components/schemas/Message'
         '403':
           $ref: '#/components/responses/ForeignOrigin'
         '404':
@@ -378,10 +421,14 @@ paths:
                 $ref: '#/components/schemas/Message'
         '503':
           description: |
-            The Publish did not go through for now: GitHub could not be
-            reached or is limiting the server's requests, or `main` kept
-            moving while the server committed. The Client can publish again
-            later.
+            The Publish did not go through for now: Zitadel could not say
+            whether the Client still holds the Site's role, GitHub could not
+            be reached or is limiting the server's requests, or `main` kept
+            moving while the server committed. The session stays, and the
+            Client can publish again later. Nothing was committed, with one
+            exception: when GitHub did not tell whether it made the commit,
+            the commit may be on `main`. Publishing the same Draft again
+            then commits nothing more, and answers with that Publish.
           headers:
             Retry-After:
               description: How many seconds to wait before publishing again, when the server knows.
@@ -490,14 +537,21 @@ components:
             $ref: '#/components/schemas/Message'
     ForeignOrigin:
       description: |
-        The request's `Origin` is not one of the Site's own, or it is a
-        `POST` without an `Origin` (A4).
+        The request's `Origin` is not one of the Site's own, it is a `POST`
+        without an `Origin`, or it is a `GET` without an `Origin` whose
+        `Sec-Fetch-Site` says it comes from another origin (A4).
       content:
         text/plain:
           schema:
             $ref: '#/components/schemas/Message'
     UnknownSite:
       description: The hostname is not one of a configured Site's.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/Message'
+    ZitadelUnavailable:
+      description: Zitadel could not be reached, so the Client can't log in for now. No session.
       content:
         text/plain:
           schema:
@@ -514,7 +568,10 @@ components:
           description: The Client's name in Zitadel.
           type: string
         locale:
-          description: The Client's locale in Zitadel, such as `es` or `en-GB`, which the Editor's language follows (N6).
+          description: |
+            The Client's locale in Zitadel, such as `es` or `en-GB`, which the
+            Editor's language follows (N6), or the Site's `locale` in the
+            Sites file when the Client has none.
           type: string
         site:
           description: The Site's `id` in the server's Sites file, such as `edity-sandbox`.
