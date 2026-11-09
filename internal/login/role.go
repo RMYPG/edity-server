@@ -26,7 +26,7 @@ const (
 	// service that lists role assignments. It needs the permission
 	// user.grant.read.
 	listAuthorizations = "/zitadel.authorization.v2.AuthorizationService/ListAuthorizations"
-	jwtBearer          = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	jwtProfileGrant    = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 	// serviceScopes put Zitadel's own project in the access token's audience,
 	// which its API requires.
 	serviceScopes = "openid urn:zitadel:iam:org:project:id:zitadel:aud"
@@ -188,7 +188,7 @@ func (z *Zitadel) accessToken(ctx context.Context, refused string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	form := url.Values{"grant_type": {jwtBearer}, "assertion": {assertion}, "scope": {serviceScopes}}
+	form := url.Values{"grant_type": {jwtProfileGrant}, "assertion": {assertion}, "scope": {serviceScopes}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.Endpoint().TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err

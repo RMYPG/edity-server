@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,6 +217,24 @@ func TestAPublishGets503AndCommitsNothingWhenZitadelCanNotAnswer(t *testing.T) {
 			}
 			sessionKept(t, b, rec)
 		})
+	}
+}
+
+func TestTheServiceUsersTokenFollowsNoRedirect(t *testing.T) {
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(elsewhere.Close)
+	lt := newLoginTest(t)
+	b := lt.withRole()
+	lt.zitadel.ListRedirect = elsewhere.URL + "/stolen"
+
+	rec := b.publish()
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body)
+	}
+	if hits.Load() != 0 {
+		t.Error("the request went to where Zitadel's answer redirected it")
 	}
 }
 

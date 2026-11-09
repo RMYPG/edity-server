@@ -33,10 +33,10 @@ import (
 )
 
 const (
-	rolesClaim = "urn:zitadel:iam:org:project:roles"
-	roleScope  = "urn:zitadel:iam:org:project:role:"
-	jwtBearer  = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-	apiScope   = "urn:zitadel:iam:org:project:id:zitadel:aud"
+	rolesClaim      = "urn:zitadel:iam:org:project:roles"
+	roleScope       = "urn:zitadel:iam:org:project:role:"
+	jwtProfileGrant = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	apiScope        = "urn:zitadel:iam:org:project:id:zitadel:aud"
 )
 
 // The Edity project and the service user that every fake Zitadel has.
@@ -91,6 +91,8 @@ type Provider struct {
 	// ListBody, when it is set, is the body ListAuthorizations answers 200
 	// with.
 	ListBody string
+	// ListRedirect, when it is set, is where ListAuthorizations redirects to.
+	ListRedirect string
 	// Hang makes ListAuthorizations answer nothing until the caller gives up.
 	Hang bool
 	// IgnoreFilters makes ListAuthorizations answer every authorization,
@@ -290,7 +292,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 		return
 	}
-	if r.PostForm.Get("grant_type") == jwtBearer {
+	if r.PostForm.Get("grant_type") == jwtProfileGrant {
 		p.serviceToken(w, r)
 		return
 	}
@@ -511,6 +513,10 @@ func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	if p.Hang {
 		<-r.Context().Done()
+		return
+	}
+	if p.ListRedirect != "" {
+		http.Redirect(w, r, p.ListRedirect, http.StatusTemporaryRedirect)
 		return
 	}
 	if p.ListStatus != 0 {

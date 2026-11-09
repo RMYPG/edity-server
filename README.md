@@ -22,7 +22,7 @@ Run the checks CI runs, the Go, OpenAPI and workflow linters and the tests, with
 mise run ci
 ```
 
-`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`. It listens on loopback only. Until those secrets hold Zitadel's values, the placeholders in `mise.toml` let it start, and `/_edity/login` answers 503. Until they hold an `EDITY_SESSION_KEY`, the key is a new random one on each run, so sessions end when the server restarts.
+`mise run dev` starts the server on `localhost:8080` with the `dev` secrets of the `edity` Infisical project, which it reads as your own Infisical user: log in once with `infisical login`. It serves the Sites in [`sites.dev.json`](sites.dev.json), where `edity-sandbox` answers on `localhost`. It listens on loopback only. Until those secrets hold Zitadel's values, the placeholders in `mise.toml` let it start, and `/_edity/login` answers 503. Until they hold `EDITY_ZITADEL_PROJECT_ID` and `EDITY_ZITADEL_SERVICE_KEY` as well, every Publish answers 503. Until they hold an `EDITY_SESSION_KEY`, the key is a new random one on each run, so sessions end when the server restarts.
 
 `mise run check:sandbox` publishes on `RMYPG/edity-sandbox` for real, with the same secrets: it changes a Field, waits for the Release, and puts it back, so it makes two commits on the sandbox's `main` and two Releases. It also checks that a Conflict and a broken Limit commit nothing. It takes as long as two runs of the sandbox's CI, and is not part of `mise run ci`.
 
