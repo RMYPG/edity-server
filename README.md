@@ -100,6 +100,7 @@ A session lasts longer than a role may, so each Publish, once it is validated an
 
 - With the role gone, the Publish ends the session, clears both cookies and answers 401. The Editor sends the Client to log in, where the login refuses them.
 - If Zitadel can't answer within 5 seconds, or does not answer as it should, the Publish commits nothing and answers 503, and the session stays: a Publish depends on Zitadel being up. That includes a service user without `user.grant.read`: Zitadel then leaves the assignments out of its list but still counts them, which the server takes for no answer, so that a missing permission can't look like every Client's role being gone.
+- A role removed only just now can still pass. Zitadel lists assignments from a view that trails its writes, and `ListAuthorizations` does not wait for that view to catch up, so the check starts refusing once the view shows the removal. Zitadel catches up in the background at least every 60 seconds by default (`Projections.RequeueEvery`).
 
 The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes (see [Content files and Prettier](#content-files-and-prettier)).
 

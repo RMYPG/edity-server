@@ -55,9 +55,10 @@ type ServiceUser struct {
 }
 
 // HoldsRole asks Zitadel whether c still holds s's role in the Edity project.
-// It remembers no answer, so a role taken away counts from the next Publish.
-// Its error means that Zitadel gave no answer, which says nothing about the
-// role.
+// It remembers no answer, so a role taken away counts from the next Publish
+// after Zitadel's list shows it: the list is a view of Zitadel's that trails
+// its writes, and ListAuthorizations does not wait for it to catch up. Its
+// error means that Zitadel gave no answer, which says nothing about the role.
 func (z *Zitadel) HoldsRole(ctx context.Context, s site.Site, c publish.Client) (bool, error) {
 	if c.ID == "" {
 		// A session sealed before sessions carried the user ID. Zitadel can't

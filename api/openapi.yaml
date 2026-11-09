@@ -260,8 +260,10 @@ paths:
         A session can outlive the Client's role. So once the request is
         validated, and before it counts against the Site's rate limit, the
         server asks Zitadel whether the session's Client still holds the
-        Site's role (A1). It remembers no answer. Only a Publish asks:
-        `GET /_edity/api/session` answers from the session alone.
+        Site's role (A1). It remembers no answer, though Zitadel's list
+        trails its writes, so a role removed only just now can still pass.
+        Only a Publish asks: `GET /_edity/api/session` answers from the
+        session alone.
 
         The Release ships everything on `main`. Once it has answered, the
         server reports on an issue of the Site repository the commits since
@@ -422,8 +424,11 @@ paths:
             The Publish did not go through for now: Zitadel could not say
             whether the Client still holds the Site's role, GitHub could not
             be reached or is limiting the server's requests, or `main` kept
-            moving while the server committed. Nothing was committed, the
-            session stays, and the Client can publish again later.
+            moving while the server committed. The session stays, and the
+            Client can publish again later. Nothing was committed, with one
+            exception: when GitHub did not tell whether it made the commit,
+            the commit may be on `main`. Publishing the same Draft again
+            then commits nothing more, and answers with that Publish.
           headers:
             Retry-After:
               description: How many seconds to wait before publishing again, when the server knows.
