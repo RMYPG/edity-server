@@ -46,6 +46,8 @@ The server reads its environment at startup and refuses to start if a variable i
 | `EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY` | Its private key, in PEM |
 | `EDITY_ZITADEL_ISSUER` | URL of the Zitadel instance Clients log in through, over `https` (or `http` on a loopback hostname), with no trailing slash |
 | `EDITY_ZITADEL_CLIENT_ID` | ID of the server's OIDC client on it |
+| `EDITY_ZITADEL_PROJECT_ID` | ID of the Edity project on it, which holds each Site's role |
+| `EDITY_ZITADEL_SERVICE_KEY` | The JSON key file of the read-only service user that asks Zitadel, at each Publish, whether the Client still holds the Site's role |
 | `EDITY_SESSION_KEY` | 32 random bytes in base64, such as `openssl rand -base64 32`, that seal the Clients' sessions |
 
 The Sites file lists every Site the server works for. A request whose hostname is not listed gets 404 on every `/_edity/` route.
@@ -77,12 +79,13 @@ Zitadel needs, in the Edity project:
 
 - a role per Site, `site:<id>`, granted to the Site's Clients, and
 - a web application with the PKCE authentication method, so with no client secret, whose redirect URIs list `https://<hostname>/_edity/api/auth/callback` for each hostname of each Site.
+- a read-only service user with a JWT-profile key, whose JSON file is `EDITY_ZITADEL_SERVICE_KEY`. It needs the permission `user.grant.read` on the project, such as through the `PROJECT_OWNER_VIEWER` role.
 
 A session is the `edity_session` cookie, `HttpOnly` and `SameSite=Strict` on `/_edity/api`, for 30 days, encrypted and authenticated with `EDITY_SESSION_KEY`. The `edity=1` marker lives as long and tells the page's inline check to load the Editor. The server stores no session, so:
 
 - A session survives a restart, as long as the key stays the same. Changing the key logs every Client out.
 - A session is checked against its Site, so one Site's cookie is worth nothing on another.
-- Logging out clears the browser's cookies, and a removed role is noticed at the next login. Until then a session that was copied, or whose Client lost the role, lasts until it expires.
+- Logging out clears the browser's cookies. A session that was copied still lasts until it expires, though it can publish only while its Client holds the role (see [Publish](#publish)).
 - Logging out leaves Zitadel's own session alone. It can't log the browser back in, because every login asks for credentials.
 
 Every API call but the callback refuses another origin (A4). `POST` must carry an `Origin` that is one of the Site's. `GET` may carry none, unless `Sec-Fetch-Site` says it comes from another origin, as a browser's `<img>` request from another page does. On a Site's real hostnames the `Origin` must be on the port the request came to. On a loopback hostname any port counts, as the Site's dev server has its own.
@@ -92,6 +95,11 @@ Every API call but the callback refuses another origin (A4). `POST` must carry a
 A Publish reads the page's content (`src/content/<page>.json`), its generated Field definitions (`src/content/<page>.schema.json`) and `package.json` from the Site repository at `main` HEAD, as the `edity-publisher` GitHub App. A Change whose stored value is not its `before`, or whose Field or Item is gone, is a Conflict, unless the stored value is its `after` already: that Change is already published, whatever its `before`, and has nothing to commit. The others merge, and the content they make must pass the Field definitions as a whole, Fields no Change touched included. The commit goes on top of that exact HEAD through GraphQL's `createCommitOnBranch`: it holds the content file and `package.json` with its patch bumped, and nothing else. If `main` moved in the meantime, the Publish reads it again and starts over, and gives up after three attempts.
 
 When every Change is already published, as when a Client publishes again a Draft whose answer they missed, the Publish commits nothing and answers with the page's last Publish, the newest of the App's commits on `main` that changed the page's content, so that the Editor follows its progress. When the App made none, the Changes are answered as though none were already published.
+
+A session lasts longer than a role may, so each Publish, once it is validated and before it takes from the rate limit, asks Zitadel whether the session's Client still holds the Site's role: `ListAuthorizations` on the authorization service, filtered on the person, the Edity project and the exact role key. It asks as the service user, with a JSON Web Token signed with its key, and keeps the access token until a minute before it expires, or until Zitadel refuses it. It remembers no answer, and only a Publish asks: `GET /_edity/api/session` answers from the session alone. Only an active assignment of that role, to that person, on that project counts:
+
+- With the role gone, the Publish ends the session, clears both cookies and answers 401. The Editor sends the Client to log in, where the login refuses them.
+- If Zitadel can't answer within 5 seconds, or does not answer as it should, the Publish commits nothing and answers 503, and the session stays: a Publish depends on Zitadel being up. That includes a service user without `user.grant.read`: Zitadel then leaves the assignments out of its list but still counts them, which the server takes for no answer, so that a missing permission can't look like every Client's role being gone.
 
 The content file is written as Prettier formats JSON, keeping its keys' order and every value no Change touched, so that the Site's `prettier --check` passes (see [Content files and Prettier](#content-files-and-prettier)).
 
