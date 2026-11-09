@@ -175,8 +175,10 @@ func (z *Zitadel) authorizations(ctx context.Context, token, userID, role string
 // shortly before it expires. refused, if not empty, is a token Zitadel has
 // just refused, which it will not return.
 func (z *Zitadel) accessToken(ctx context.Context, refused string) (string, error) {
-	z.tokenMu.Lock()
-	defer z.tokenMu.Unlock()
+	if err := z.tokenLock.acquire(ctx); err != nil {
+		return "", fmt.Errorf("getting an access token: %w", err)
+	}
+	defer z.tokenLock.release()
 	if z.token != "" && z.token != refused && z.now().Add(tokenMargin).Before(z.tokenExpires) {
 		return z.token, nil
 	}

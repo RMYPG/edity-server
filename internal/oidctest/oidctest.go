@@ -95,6 +95,12 @@ type Provider struct {
 	ListRedirect string
 	// Hang makes ListAuthorizations answer nothing until the caller gives up.
 	Hang bool
+	// HangDiscovery makes the discovery document answer nothing until the
+	// caller gives up.
+	HangDiscovery bool
+	// HangServiceToken makes the token endpoint answer the service user
+	// nothing until the caller gives up.
+	HangServiceToken bool
 	// IgnoreFilters makes ListAuthorizations answer every authorization,
 	// whatever it was asked.
 	IgnoreFilters bool
@@ -114,6 +120,7 @@ type Provider struct {
 	access         map[string]time.Time
 	issued         int
 	lists          []string
+	hanging        int
 }
 
 // A grant is a login that went through: first its code, then its access
@@ -181,6 +188,21 @@ func (p *Provider) AccessTokensIssued() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.issued
+}
+
+// Hanging counts the calls the provider has left without an answer.
+func (p *Provider) Hanging() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hanging
+}
+
+// hang leaves r without an answer until the caller gives up.
+func (p *Provider) hang(r *http.Request) {
+	p.mu.Lock()
+	p.hanging++
+	p.mu.Unlock()
+	<-r.Context().Done()
 }
 
 // RevokeAccessTokens makes Zitadel refuse every access token it gave so far,
@@ -261,7 +283,11 @@ func back(t testing.TB, q, answer url.Values) string {
 	return callback.String()
 }
 
-func (p *Provider) discovery(w http.ResponseWriter, _ *http.Request) {
+func (p *Provider) discovery(w http.ResponseWriter, r *http.Request) {
+	if p.HangDiscovery {
+		p.hang(r)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issuer":                                p.Issuer(),
 		"authorization_endpoint":                p.Issuer() + "/oauth/v2/authorize",
@@ -388,6 +414,10 @@ func (p *Provider) now() time.Time {
 // assertion. Without the scope that adds Zitadel's own project to the
 // audience, the token would be good for nothing at its API.
 func (p *Provider) serviceToken(w http.ResponseWriter, r *http.Request) {
+	if p.HangServiceToken {
+		p.hang(r)
+		return
+	}
 	if err := p.checkAssertion(r.PostForm.Get("assertion")); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant", "error_description": err.Error()})
 		return
@@ -512,7 +542,7 @@ func (p *Provider) listAuthorizations(w http.ResponseWriter, r *http.Request) {
 	expires, known := p.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 	p.mu.Unlock()
 	if p.Hang {
-		<-r.Context().Done()
+		p.hang(r)
 		return
 	}
 	if p.ListRedirect != "" {

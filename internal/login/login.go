@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -132,13 +131,32 @@ type Zitadel struct {
 	api *http.Client
 	now func() time.Time
 
-	mu       sync.Mutex
-	provider *oidc.Provider
+	providerLock lock
+	provider     *oidc.Provider
 
-	tokenMu      sync.Mutex
+	tokenLock    lock
 	token        string
 	tokenExpires time.Time
 }
+
+// A lock is a mutex whose wait ends with a context. Its holders wait on
+// Zitadel, for as long as their own contexts allow, and a sync.Mutex would
+// keep a role check queued behind them past its own deadline.
+type lock chan struct{}
+
+func newLock() lock { return make(lock, 1) }
+
+// acquire takes the lock, or returns the context's error once it ends.
+func (l lock) acquire(ctx context.Context) error {
+	select {
+	case l <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l lock) release() { <-l }
 
 // New returns a Zitadel. Its error says only that the key is wrong, or that
 // the service user is missing: no key is ever in it.
@@ -157,6 +175,7 @@ func New(o Options) (*Zitadel, error) {
 	z := &Zitadel{
 		issuer: o.Issuer, clientID: o.ClientID, projectID: o.ProjectID, serviceUser: o.ServiceUser,
 		sealer: sealer{aead}, client: o.HTTP, now: o.Now,
+		providerLock: newLock(), tokenLock: newLock(),
 	}
 	if z.client == nil {
 		z.client = &http.Client{Timeout: 10 * time.Second}
@@ -172,8 +191,10 @@ func New(o Options) (*Zitadel, error) {
 
 // discover returns the instance's endpoints, read once.
 func (z *Zitadel) discover(ctx context.Context) (*oidc.Provider, error) {
-	z.mu.Lock()
-	defer z.mu.Unlock()
+	if err := z.providerLock.acquire(ctx); err != nil {
+		return nil, fmt.Errorf("reading Zitadel's endpoints: %w", err)
+	}
+	defer z.providerLock.release()
 	if z.provider != nil {
 		return z.provider, nil
 	}

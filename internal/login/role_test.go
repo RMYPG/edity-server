@@ -2,6 +2,8 @@ package login_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +47,68 @@ func TestTheRoleCheckGivesUpWithItsContext(t *testing.T) {
 	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("it took %v, want it to give up with its context", took)
+	}
+}
+
+// A role check can queue behind a caller stuck on Zitadel for longer than the
+// check may wait. It still gives up when its own context ends, or a Publish
+// would outlast its 503.
+func TestARoleCheckBehindAStuckCallerGivesUpWithItsContext(t *testing.T) {
+	for name, stuck := range map[string]struct {
+		hang func(*oidctest.Provider)
+		call func(context.Context, *login.Zitadel)
+	}{
+		"a login reading Zitadel's endpoints": {
+			hang: func(z *oidctest.Provider) { z.HangDiscovery = true },
+			call: func(ctx context.Context, zitadel *login.Zitadel) {
+				r := httptest.NewRequestWithContext(ctx, http.MethodGet, "https://example.com/_edity/login", nil)
+				_, _ = zitadel.Start(httptest.NewRecorder(), r, sandbox)
+			},
+		},
+		"another check getting the access token": {
+			hang: func(z *oidctest.Provider) { z.HangServiceToken = true },
+			call: func(ctx context.Context, zitadel *login.Zitadel) { _, _ = zitadel.HoldsRole(ctx, sandbox, ana) },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			z := oidctest.New(t, "337@edity")
+			stuck.hang(z)
+			zitadel := newZitadel(t, z)
+			stuckCtx, unstick := context.WithCancel(t.Context())
+			defer unstick()
+			go stuck.call(stuckCtx, zitadel)
+			waitForAHangingCall(t, z)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			type answer struct {
+				held bool
+				err  error
+			}
+			answered := make(chan answer, 1)
+			go func() {
+				held, err := zitadel.HoldsRole(ctx, sandbox, ana)
+				answered <- answer{held, err}
+			}()
+
+			select {
+			case got := <-answered:
+				if got.err == nil || got.held {
+					t.Errorf("HoldsRole = %v, %v, want an error", got.held, got.err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("HoldsRole is still waiting for the stuck caller, long after its context ended")
+			}
+		})
+	}
+}
+
+func waitForAHangingCall(t *testing.T, z *oidctest.Provider) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); z.Hanging() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no call reached the fake Zitadel")
+		}
 	}
 }
 
