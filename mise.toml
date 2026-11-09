@@ -20,14 +20,14 @@ node = "24.22.1"
 # new each time: anyone can read a fixed one here, and forge a session on a dev
 # server that holds the publisher's real key. The service key is the key of no
 # user at Zitadel, so a copy of it opens nothing. Making one takes a moment, so
-# mise keeps it, and every mise command does not pay for it. awk writes each
-# line's end as the two characters \n of a JSON string, 92 being the backslash,
-# which the template would otherwise read as an escape.
+# mise keeps it, and every mise command does not pay for it. Node, declared
+# above, makes it (tools = true), so nothing but what this file declares is
+# needed, and a failure stops mise instead of leaving an empty key.
 [env]
 EDITY_ZITADEL_ISSUER = "https://zitadel.invalid"
 EDITY_ZITADEL_CLIENT_ID = "dev"
 EDITY_ZITADEL_PROJECT_ID = "dev"
-EDITY_ZITADEL_SERVICE_KEY = '''{{ exec(command=`printf '{"type":"serviceaccount","keyId":"dev","userId":"dev","key":"%s"}' "$(openssl genrsa 2048 2>/dev/null | awk '{printf "%s%cn", $0, 92}')"`, cache_key='edity-server-placeholder-service-key') }}'''
+EDITY_ZITADEL_SERVICE_KEY = { value = '''{{ exec(command=`node -e "const {privateKey: key} = require('node:crypto').generateKeyPairSync('rsa', {modulusLength: 2048, publicKeyEncoding: {type: 'spki', format: 'pem'}, privateKeyEncoding: {type: 'pkcs8', format: 'pem'}}); process.stdout.write(JSON.stringify({type: 'serviceaccount', keyId: 'dev', userId: 'dev', key}))"`, cache_key='edity-server-placeholder-service-key') }}''', tools = true }
 EDITY_SESSION_KEY = "{{ exec(command='head -c 32 /dev/urandom | base64') }}"
 
 [tasks.lint]
