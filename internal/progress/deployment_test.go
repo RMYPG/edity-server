@@ -20,6 +20,8 @@ const (
 	scanFailing     = "ImageRepository flux-system/edity-sandbox: Ready=False (ReconciliationFailed): auth failed for ghcr.io/rmypg/edity-sandbox"
 	noResolvedTag   = "ImagePolicy flux-system/edity-sandbox-production has no resolved tag"
 	helmReleaseGone = "HelmRelease edity-sandbox/edity-sandbox not found"
+	// imageWithNoTag comes with a null running.
+	imageWithNoTag = "ReplicaSet edity-sandbox-sws-594f98bf45 runs image ghcr.io/rmypg/edity-sandbox@sha256:9f2c4b1e7a3d5f60b8e4c2a1d7f3e9b05c6a8d2e4f1b3c5a7d9e0f2a4b6c8d0e, which has no tag"
 )
 
 // recordedReason is the reason of the service's answer recorded in name.
@@ -175,9 +177,16 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			status: productionAt(t, "v1.0.1", "", rollout.Deploying, scanFailing),
 			want:   Progress{Stage: Deploying, Version: v101},
 		},
+		// A tag that names no version, as of an image tagged by hand, can't
+		// be compared with one, so it counts as unknown, as null does.
 		"deploying: an image with no version tag running, an hour after its tag": {
 			sha: first, now: at("21:00:00"), edit: onlyFirst,
-			status: productionAt(t, "v1.0.1", "latest", rollout.Deploying, "ReplicaSet edity-sandbox-sws-594f98bf45 runs image ghcr.io/rmypg/edity-sandbox:latest, which has no tag"),
+			status: productionAt(t, "v1.0.1", "latest", rollout.Deploying, ""),
+			want:   Progress{Stage: Deploying, Version: v101},
+		},
+		"deploying: an image with no tag running, an hour after its tag": {
+			sha: first, now: at("21:00:00"), edit: onlyFirst,
+			status: productionAt(t, "v1.0.1", "", rollout.Deploying, imageWithNoTag),
 			want:   Progress{Stage: Deploying, Version: v101},
 		},
 		"deploying: picked up while the image scan fails": {
@@ -242,9 +251,9 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			status: productionAt(t, "", "", rollout.Deploying, noResolvedTag+"; Deployment edity-sandbox/edity-sandbox-sws not found"),
 			want:   Progress{Stage: Released, Version: v101},
 		},
-		"released: an image with no version tag running, with a reason": {
+		"released: an image with no version tag running, while the image scan fails": {
 			sha: first, now: at("18:58:00"), edit: onlyFirst,
-			status: productionAt(t, "v1.0.0", "latest", rollout.Deploying, "ReplicaSet edity-sandbox-sws-594f98bf45 runs image ghcr.io/rmypg/edity-sandbox:latest, which has no tag"),
+			status: productionAt(t, "v1.0.0", "latest", rollout.Deploying, scanFailing),
 			want:   Progress{Stage: Released, Version: v101},
 		},
 		"failed: an ImagePolicy with no resolved tag": {
