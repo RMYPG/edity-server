@@ -23,8 +23,7 @@ const sandbox = `{
       "hostnames": ["sandbox.example.com"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
-      "zitadelRole": "site:edity-sandbox",
-      "kubernetes": {"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+      "zitadelRole": "site:edity-sandbox"
     }
   ]
 }`

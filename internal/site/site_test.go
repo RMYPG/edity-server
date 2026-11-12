@@ -18,8 +18,7 @@ const sandbox = `{
       "hostnames": ["sandbox.example.com", "www.sandbox.example.com"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
-      "zitadelRole": "site:edity-sandbox",
-      "kubernetes": {"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+      "zitadelRole": "site:edity-sandbox"
     }
   ]
 }`
@@ -36,7 +35,6 @@ func TestLookupFindsTheSiteForEachOfItsHostnames(t *testing.T) {
 		Repository:  site.Repository{Owner: "RMYPG", Name: "edity-sandbox"},
 		Locale:      "en",
 		ZitadelRole: "site:edity-sandbox",
-		Kubernetes:  site.Kubernetes{Namespace: "edity-sandbox", Deployment: "edity-sandbox-sws"},
 	}
 	for _, host := range []string{"sandbox.example.com", "www.sandbox.example.com"} {
 		got, ok := sites.Lookup(host)
@@ -187,9 +185,14 @@ func TestParseRejectsAnInvalidSitesFile(t *testing.T) {
 		{"text after it", sandbox + " garbage", "more than one JSON value"},
 		{"a key twice", strings.Replace(sandbox, `"locale": "en",`, `"locale": "en", "locale": "es",`, 1), `"sites[0].locale" appears twice`},
 		{"a key twice in another case", strings.Replace(sandbox, `"locale": "en",`, `"locale": "en", "Locale": "es",`, 1), `"sites[0].Locale" appears twice`},
-		{"a nested key twice", strings.Replace(sandbox, `"namespace": "edity-sandbox",`, `"namespace": "edity-sandbox", "namespace": "other",`, 1), `"sites[0].kubernetes.namespace" appears twice`},
+		{"a nested key twice", strings.Replace(sandbox, `"locale": "en",`, `"locale": "en", "extra": {"a": 1, "a": 2},`, 1), `"sites[0].extra.a" appears twice`},
 		{"the sites key twice", strings.Replace(sandbox, `{`, `{"sites": [], `, 1), `"sites" appears twice`},
 		{"misspelt field", withSandbox(t, func(s map[string]any) { s["hostname"] = "sandbox.example.com" }), `unknown field "hostname"`},
+		// The server holds no Kubernetes credentials, and asks the
+		// platform's rollout status service by the Site's id.
+		{"where the Site runs in Kubernetes", withSandbox(t, func(s map[string]any) {
+			s["kubernetes"] = map[string]any{"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+		}), `unknown field "kubernetes"`},
 		{"no Sites", `{"sites": []}`, "no Sites"},
 		{"no id", withSandbox(t, func(s map[string]any) { delete(s, "id") }), "site 1: id is required"},
 		{"no hostnames", withSandbox(t, func(s map[string]any) { s["hostnames"] = []string{} }), `site "edity-sandbox": hostnames: at least one is required`},
@@ -206,11 +209,7 @@ func TestParseRejectsAnInvalidSitesFile(t *testing.T) {
 		{"locale that is not a language tag", withSandbox(t, func(s map[string]any) { s["locale"] = "not_a_locale" }), `locale: "not_a_locale" is not a language tag`},
 		{"blank Zitadel role", withSandbox(t, func(s map[string]any) { s["zitadelRole"] = " " }), `site "edity-sandbox": zitadelRole is required`},
 		{"Zitadel role with a space", withSandbox(t, func(s map[string]any) { s["zitadelRole"] = "site: edity-sandbox" }), `zitadelRole: "site: edity-sandbox" has spaces`},
-		{"namespace that is not a Kubernetes name", withSandbox(t, func(s map[string]any) { s["kubernetes"].(map[string]any)["namespace"] = "UPPER_CASE" }), `kubernetes.namespace: "UPPER_CASE" is not a Kubernetes namespace name`},
-		{"Deployment that is not a Kubernetes name", withSandbox(t, func(s map[string]any) { s["kubernetes"].(map[string]any)["deployment"] = "bad/name" }), `kubernetes.deployment: "bad/name" is not a Kubernetes object name`},
 		{"no Zitadel role", withSandbox(t, func(s map[string]any) { delete(s, "zitadelRole") }), `site "edity-sandbox": zitadelRole is required`},
-		{"no namespace", withSandbox(t, func(s map[string]any) { delete(s["kubernetes"].(map[string]any), "namespace") }), `site "edity-sandbox": kubernetes.namespace is required`},
-		{"no Deployment", withSandbox(t, func(s map[string]any) { delete(s["kubernetes"].(map[string]any), "deployment") }), `site "edity-sandbox": kubernetes.deployment is required`},
 		{"two Sites with one id", withSandboxTwice(t, func(other map[string]any) { other["hostnames"] = []string{"other.example.com"} }), `two Sites have the id "edity-sandbox"`},
 		{"two Sites with one hostname", withSandboxTwice(t, func(other map[string]any) {
 			other["id"] = "other"
