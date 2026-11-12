@@ -72,6 +72,34 @@ func lightweight(t testing.TB, a map[string]githubtest.Response, name, sha strin
 	a["git/matching-refs/tags/v"] = githubtest.Response{Status: r.Status, Header: r.Header, Body: b}
 }
 
+// withTag edits GitHub's answers to add an annotated tag name on the
+// commit sha, made at date, as v1.0.2's tag answers, with object as its
+// sha. GitHub's comparison of sha with it is the recorded comparison of the
+// first Publish with v1.0.2: ahead.
+func withTag(t testing.TB, a map[string]githubtest.Response, name, object, sha, date string) {
+	t.Helper()
+	r := a["git/matching-refs/tags/v"]
+	var refs []map[string]any
+	if err := json.Unmarshal(r.Body, &refs); err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, map[string]any{
+		"ref":    "refs/tags/" + name,
+		"object": map[string]any{"sha": object, "type": "tag", "url": "https://api.github.com/repos/RMYPG/edity-sandbox/git/tags/" + object},
+	})
+	b, err := json.Marshal(refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a["git/matching-refs/tags/v"] = githubtest.Response{Status: r.Status, Header: r.Header, Body: b}
+	a["git/tags/"+object] = githubtest.Edited(t, githubtest.Recorded(t, "tag-v1.0.2.http"), func(body map[string]any) {
+		body["sha"], body["tag"], body["message"] = object, name, "Release "+name+"\n"
+		body["tagger"].(map[string]any)["date"] = date
+		body["object"].(map[string]any)["sha"] = sha
+	})
+	a["compare/"+sha+"..."+name+"?per_page=1"] = githubtest.Recorded(t, "compare-"+sha[:7]+"-v1.0.2.http")
+}
+
 // TestEachDeploymentStageFromTheRolloutStatus follows each stage past
 // released, with GitHub's answers as recorded, or edited to how they were
 // earlier, and the rollout status service's at the versions GitHub's
@@ -269,6 +297,43 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			status:  productionAt(t, "v1.0.2", "v1.0.0", rollout.Deploying, ""),
 			want:    Progress{Stage: Failed, Version: v101, Reason: "not live 60 minutes after its Release"},
 			failure: "not-live:" + first,
+		},
+		// v1.0.1's own tag gave way to v1.0.2, and v1.0.3 followed at
+		// 19:30: the hour counts from v1.0.2, neither from a tag of its own
+		// nor from the highest.
+		"deploying: the hour from the lowest of two newer Releases, to the second": {
+			sha: first, now: at("19:55:28"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				withoutTag(t, a, "v1.0.1")
+				withTag(t, a, "v1.0.3", "3333333333333333333333333333333333333333", first, "2026-10-29T19:30:00Z")
+			},
+			status: productionAt(t, "v1.0.3", "v1.0.0", rollout.Deploying, ""),
+			want:   Progress{Stage: Deploying, Version: v101},
+		},
+		"failed: an hour after the lowest of two newer Releases": {
+			sha: first, now: at("19:55:29"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				withoutTag(t, a, "v1.0.1")
+				withTag(t, a, "v1.0.3", "3333333333333333333333333333333333333333", first, "2026-10-29T19:30:00Z")
+			},
+			status:  productionAt(t, "v1.0.3", "v1.0.0", rollout.Deploying, ""),
+			want:    Progress{Stage: Failed, Version: v101, Reason: "not live 60 minutes after its Release"},
+			failure: "not-live:" + first,
+		},
+		"deploying: a tag that has no date sets no deadline": {
+			sha: first, now: at("21:00:00"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.1")
+				a["git/tags/"+tagV101] = githubtest.Edited(t, a["git/tags/"+tagV101], func(body map[string]any) { delete(body, "tagger") })
+			},
+			status: productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, ""),
+			want:   Progress{Stage: Deploying, Version: v101},
+		},
+		"failed: a first install's rollout, with no version running, an hour after its tag": {
+			sha: first, now: at("21:00:00"), edit: onlyFirst,
+			status:  productionAt(t, "v1.0.1", "", rollout.Failed, recorded),
+			want:    Progress{Stage: Failed, Version: v101, Reason: "its rollout failed"},
+			failure: "rollout:" + first, rollout: recorded,
 		},
 		"failed: an hour after the commit of a lightweight tag": {
 			sha: first, now: at("19:50:02"),

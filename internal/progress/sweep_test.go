@@ -3,6 +3,7 @@ package progress
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -168,6 +169,35 @@ func TestASweepReportsAFailureOfTheLastReleaseWhenNoVersionRuns(t *testing.T) {
 	f.set(at("21:00:00"), a)
 	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Progress[first].Stage != Deploying || len(reporter.failures()) != 0 {
 		t.Errorf("Sweep = %+v, %v, told %+v, want the first Publish deploying, and nothing told", sw, err, reporter.failures())
+	}
+
+	// With Releases before the last, from the one before it, not from all
+	// of main's: the second Publish, and not the first, whose v1.0.1 the
+	// Site ran before. main is the second Publish, whose comparison with
+	// v1.0.1 is the first's with v1.0.0 for its commit's sha, and whose
+	// commits are the first's with it on top.
+	f, tracker = newFake(t)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, reason))
+	c := answers(t)
+	c["compare/v1.0.1...main"] = githubtest.Edited(t, githubtest.Recorded(t, "compare-v1.0.0-4bc9310.http"), func(body map[string]any) {
+		body["commits"].([]any)[0].(map[string]any)["sha"] = second
+	})
+	listed := githubtest.Recorded(t, "commits-4bc9310.http")
+	var commits []map[string]any
+	if err := json.Unmarshal(listed.Body, &commits); err != nil {
+		t.Fatal(err)
+	}
+	top := maps.Clone(commits[0])
+	top["sha"] = second
+	body, err := json.Marshal(append([]map[string]any{top}, commits...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c["commits?sha=main&per_page=100"] = githubtest.Response{Status: listed.Status, Header: listed.Header, Body: body}
+	f.set(at("18:58:00"), c)
+	sw, err = tracker.Sweep(t.Context(), sandbox)
+	if err != nil || !slices.Equal(slices.Collect(maps.Keys(sw.Progress)), []string{second}) || sw.Progress[second].Stage != Failed || f.asked["commits?sha=main&per_page=100"] != 0 {
+		t.Errorf("Sweep = %+v, %v, want the second Publish alone, failed, since v1.0.1", sw, err)
 	}
 
 	// With a single Release, the last is all of main's.
