@@ -776,7 +776,9 @@ components:
               the platform picked up failed, or the platform reports a failure
               while it has not picked up the Release, as when the image scan
               fails, or the Site still runs an older version 60 minutes after
-              the Release was tagged. The changes are saved but not live, and
+              the Release was tagged: the 60 minutes count only while the Site
+              runs a known older version, not while it runs none, as when its
+              Pod restarts. The changes are saved but not live, and
               the Developer has been told: an issue on the Site repository
               says what failed and links to the run, or quotes the rollout
               status service (P5, V6). The server answers `failed` only once

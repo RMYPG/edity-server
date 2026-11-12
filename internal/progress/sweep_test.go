@@ -160,11 +160,11 @@ func TestASweepReportsAFailureOfTheLastReleaseWhenNoVersionRuns(t *testing.T) {
 	}
 
 	// A Pod restarting, long after the tag, is swept the same way, and
-	// tells the Developer of nothing.
+	// tells the Developer of nothing, even while the image scan fails.
 	f, tracker = newFake(t)
 	reporter = &fakeReporter{}
 	tracker.reporter = reporter
-	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Deploying, ""))
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Deploying, scanFailing))
 	f.set(at("21:00:00"), a)
 	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Progress[first].Stage != Deploying || len(reporter.failures()) != 0 {
 		t.Errorf("Sweep = %+v, %v, told %+v, want the first Publish deploying, and nothing told", sw, err, reporter.failures())

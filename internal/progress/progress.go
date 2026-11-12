@@ -31,9 +31,10 @@
 //     target fails, when the platform reports a failure while its target is
 //     older than the Publish, as when the image scan fails, or when the Site
 //     still runs an older version an hour after the Publish's Release was
-//     tagged. A Site that runs no version the service knows, with nothing
-//     failing, is a Pod restarting, not a Release that did not go live, so
-//     the hour does not count then.
+//     tagged, which counts only while the service knows the older version
+//     the Site runs: a Site that runs no version it knows is between two
+//     Pods, as when one restarts, and its rollout failures, first installs
+//     included, arrive as a failed phase within minutes.
 //
 // The rollout status service answers how production's rollout stands, by
 // the Site's id (rollout.Client). An answer it does not give, whatever the
@@ -487,12 +488,15 @@ func (t *Tracker) deployment(ctx context.Context, repo Repository, s site.Site, 
 	case Failed:
 		return failed(kind, reason, status.Reason)
 	}
-	// Only with the service's answer that the Site runs an older version
-	// can the hour pass. A Site with no version running and no reason is,
-	// as the contract has it, a Pod between two lives, as when it restarts:
+	// Only with the service's answer that the Site runs a version, older
+	// than the Publish's, can the hour pass. With no version it knows
+	// running, the Site is between two Pods, as when one restarts, and
 	// failing then would tell the Developer of nothing, and use up the
-	// Failure's ID for when something does fail.
-	if status.Running == "" && status.Reason == "" {
+	// Failure's ID for when something does fail. A reason can't tell a
+	// restart from a failure: the service sets a discovery reason, such as
+	// a failing image scan, whatever the phase. A failed rollout, a first
+	// install's included, is a failed phase, which failed above.
+	if !atLeast(status.Running, release.Version{}) {
 		p.Stage = stage
 		return p, nil, nil
 	}
