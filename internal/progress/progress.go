@@ -31,10 +31,11 @@
 //     target fails, when the platform reports a failure while its target is
 //     older than the Publish, as when the image scan fails, or when the Site
 //     still runs an older version an hour after the Publish's Release was
-//     tagged, which counts only while the service knows the older version
-//     the Site runs: a Site that runs no version it knows is between two
-//     Pods, as when one restarts, and its rollout failures, first installs
-//     included, arrive as a failed phase within minutes.
+//     tagged. The last two count only while the service knows the older
+//     version the Site runs: a Site that runs no version it knows is between
+//     two Pods, as when one restarts or the cluster recovers, and its rollout
+//     failures, first installs included, arrive as a failed phase within
+//     minutes.
 //
 // The rollout status service answers how production's rollout stands, by
 // the Site's id (rollout.Client). An answer it does not give, whatever the
@@ -518,7 +519,11 @@ func (t *Tracker) deployment(ctx context.Context, repo Repository, s site.Site, 
 //   - Live once the Site runs v or a newer version, whatever else holds.
 //   - Failed when the rollout of the target failed while the target is v or
 //     newer, or when the service reports a failure while the target is
-//     older than v: the platform can't see v, as when the image scan fails.
+//     older than v and the Site runs a version it knows: the platform can't
+//     see v, as when the image scan of a live Site fails. With no version it
+//     knows running, as while the cluster recovers and the service answers
+//     null for both, the reason can't tell that from the Site being
+//     re-created, so it is Released.
 //   - Deploying while the target is v or newer.
 //   - Released otherwise, while the platform has yet to pick v up.
 func byStatus(v release.Version, status rollout.Status) (stage Stage, kind, reason string) {
@@ -530,7 +535,7 @@ func byStatus(v release.Version, status rollout.Status) (stage Stage, kind, reas
 		return Failed, "rollout", "its rollout failed"
 	case targeted:
 		return Deploying, "", ""
-	case status.Reason != "":
+	case status.Reason != "" && atLeast(status.Running, release.Version{}):
 		return Failed, "no-target", "the platform did not pick up its Release"
 	}
 	return Released, "", ""

@@ -234,6 +234,19 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			want:    Progress{Stage: Failed, Version: v102, Reason: "the platform did not pick up its Release"},
 			failure: "no-target:" + second, rollout: helmReleaseGone,
 		},
+		// While the cluster recovers, the Site's Deployment and ImagePolicy
+		// are re-created, and the service knows neither version: the reason
+		// can't tell that from a scan that fails.
+		"released: no version known while the cluster recovers, with a reason": {
+			sha: first, now: at("18:58:00"), edit: onlyFirst,
+			status: productionAt(t, "", "", rollout.Deploying, noResolvedTag+"; Deployment edity-sandbox/edity-sandbox-sws not found"),
+			want:   Progress{Stage: Released, Version: v101},
+		},
+		"released: an image with no version tag running, with a reason": {
+			sha: first, now: at("18:58:00"), edit: onlyFirst,
+			status: productionAt(t, "v1.0.0", "latest", rollout.Deploying, "ReplicaSet edity-sandbox-sws-594f98bf45 runs image ghcr.io/rmypg/edity-sandbox:latest, which has no tag"),
+			want:   Progress{Stage: Released, Version: v101},
+		},
 		"failed: an ImagePolicy with no resolved tag": {
 			sha: first, now: at("18:53:00"), edit: onlyFirst,
 			status:  productionAt(t, "", "v1.0.0", rollout.Deploying, noResolvedTag),

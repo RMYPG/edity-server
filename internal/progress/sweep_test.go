@@ -213,6 +213,29 @@ func TestASweepReportsAFailureOfTheLastReleaseWhenNoVersionRuns(t *testing.T) {
 	}
 }
 
+func TestASweepWhileTheClusterRecoversReportsNothing(t *testing.T) {
+	// The Site's Deployment and ImagePolicy are re-created, and the service
+	// knows neither version, with a reason. The sweep reads the last
+	// Release, v1.0.1, again, whose Publish was live minutes before: it is
+	// released, and the Developer is told of nothing.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.status.Set(sandbox.ID, productionAt(t, "", "", rollout.Deploying,
+		"ImagePolicy flux-system/edity-sandbox-production not found; Deployment edity-sandbox/edity-sandbox-sws not found"))
+	a := answers(t)
+	tagsUpTo(t, a, "v1.0.1")
+	mainAt(t, a, first)
+	f.set(at("19:20:00"), a)
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	if err != nil || sw.Running != "" || !maps.Equal(sw.Progress, map[string]Progress{first: {Stage: Released, Version: release.Version{1, 0, 1}}}) {
+		t.Errorf("Sweep = %+v, %v, want the first Publish released, since v1.0.0", sw, err)
+	}
+	if told := reporter.failures(); len(told) != 0 {
+		t.Errorf("the Developer was told of %+v", told)
+	}
+}
+
 func TestASweepWithoutTheRolloutStatusSweepsSinceTheLastRelease(t *testing.T) {
 	// The service can't be reached: what GitHub tells is still reported.
 	f, tracker := newFake(t)
