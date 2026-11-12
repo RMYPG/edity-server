@@ -49,11 +49,13 @@ type Sweep struct {
 // after it was cut. Those Publishes are the ones since the Release
 // production runs, as the rollout status service tells it. When it tells
 // that production runs no version it knows, such as when the Site has no
-// Pod available, they are the ones since the Release before the last, so
-// that the last Release's own are swept too, or all of main's when there
-// is no Release before it. When it does not answer, or tells a Release
-// GitHub has no tag of, they are the ones since the last Release, which
-// GitHub alone can fail. The Tracker's Reporter tells a failure once, however many sweeps
+// Pod available, they are the ones since the Release before the target, so
+// that the target's own are swept too, when the target is a Release older
+// than the last, and otherwise since the Release before the last, so that
+// the last Release's own are; or all of main's when there is no Release
+// before it. When it does not answer, or tells a Release GitHub has no tag
+// of, they are the ones since the last Release, which GitHub alone can
+// fail. The Tracker's Reporter tells a failure once, however many sweeps
 // find it, and the progress of each commit is a look that requests for it
 // share. The Publishes whose progress was not told are left to the next
 // sweep, and the error joins their errors, and the service's.
@@ -86,8 +88,12 @@ func (t *Tracker) Sweep(ctx context.Context, s site.Site) (Sweep, error) {
 		switch {
 		case !atLeast(status.Running, release.Version{}):
 			// No version runs that the service knows, so the last Release
-			// does not run either.
+			// does not run either, nor the target, whose rollout may be the
+			// one that failed.
 			since = previous
+			if before, ok := releaseBefore(tags, status.Target); ok {
+				since = before
+			}
 		case older(status.Running, last):
 			since = status.Running
 		}
@@ -131,6 +137,25 @@ func older(running, last string) bool {
 	v, ok := strings.CutPrefix(last, "v")
 	l, isVersion := release.ParseVersion(v)
 	return ok && isVersion && atLeast(running, release.Version{}) && !atLeast(running, l)
+}
+
+// releaseBefore returns the tag of the Release before target, or "" when
+// there is none, and true when target is one of tags older than the last.
+func releaseBefore(tags []tag, target string) (string, bool) {
+	name, ok := strings.CutPrefix(target, "v")
+	v, isVersion := release.ParseVersion(name)
+	if !ok || !isVersion {
+		return "", false
+	}
+	for i, t := range tags[:max(0, len(tags)-1)] {
+		if t.version == v {
+			if i == 0 {
+				return "", true
+			}
+			return "v" + tags[i-1].version.String(), true
+		}
+	}
+	return "", false
 }
 
 // commitsSince lists the commits on main since the tag since, newest

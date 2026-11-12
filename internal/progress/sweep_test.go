@@ -213,6 +213,53 @@ func TestASweepReportsAFailureOfTheLastReleaseWhenNoVersionRuns(t *testing.T) {
 	}
 }
 
+func TestASweepFromBeforeAnOlderTargetWhenNoVersionRuns(t *testing.T) {
+	// v1.0.1's rollout failed with no version running, and v1.0.2 followed,
+	// which the platform has yet to pick up. The sweep starts from the
+	// Release before the target, v1.0.0, not from v1.0.1, so that the
+	// first Publish, whose rollout is the one that failed, is swept. main
+	// is the second Publish: since v1.0.0 are both Publishes, the recorded
+	// comparison with the second added, and since v1.0.1 the second alone.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	reason := recordedReason(t, "failed-170046.json")
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Failed, reason))
+	a := answers(t)
+	compared := githubtest.Recorded(t, "compare-v1.0.0-4bc9310.http")
+	a["compare/v1.0.0...main"] = githubtest.Edited(t, compared, func(body map[string]any) {
+		commits := body["commits"].([]any)
+		next := maps.Clone(commits[0].(map[string]any))
+		next["sha"] = second
+		body["commits"] = append(commits, next)
+	})
+	a["compare/v1.0.1...main"] = githubtest.Edited(t, compared, func(body map[string]any) {
+		body["commits"].([]any)[0].(map[string]any)["sha"] = second
+	})
+	f.set(at("18:58:00"), a)
+
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "its rollout failed"}
+	if err != nil || !maps.Equal(sw.Progress, map[string]Progress{first: failed, second: {Stage: Released, Version: release.Version{1, 0, 2}}}) {
+		t.Errorf("Sweep = %+v, %v, want the first Publish failed and the second released, since v1.0.0", sw, err)
+	}
+	want := []Failure{{SHA: first, Message: firstMessage, Version: failed.Version, Released: true, Reason: failed.Reason, Rollout: reason, ID: "rollout:" + first}}
+	if told := reporter.failures(); !slices.Equal(told, want) {
+		t.Errorf("the Developer was told of %+v, want %+v", told, want)
+	}
+
+	// The target the first Release, with no Release before it: all of
+	// main's.
+	f, tracker = newFake(t)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.0", "", rollout.Deploying, ""))
+	b := answers(t)
+	mainAt(t, b, first)
+	f.set(at("18:58:00"), b)
+	if _, err := tracker.Sweep(t.Context(), sandbox); err != nil || f.asked["commits?sha=main&per_page=100"] != 1 {
+		t.Errorf("Sweep: %v, and main's commits asked %d times, want once", err, f.asked["commits?sha=main&per_page=100"])
+	}
+}
+
 func TestASweepWhileTheClusterRecoversReportsNothing(t *testing.T) {
 	// The Site's Deployment and ImagePolicy are re-created, and the service
 	// knows neither version, with a reason. The sweep reads the last
