@@ -260,6 +260,130 @@ func TestASweepFromBeforeAnOlderTargetWhenNoVersionRuns(t *testing.T) {
 	}
 }
 
+// comparedWith is GitHub's comparison of a tag with main, holding the
+// commits shas, oldest first, made from the recorded comparison of v1.0.0
+// with the first Publish. A sha that is not a Publish's is a Developer's
+// commit, not by the App.
+func comparedWith(t testing.TB, shas ...string) githubtest.Response {
+	t.Helper()
+	return githubtest.Edited(t, githubtest.Recorded(t, "compare-v1.0.0-4bc9310.http"), func(body map[string]any) {
+		publish := body["commits"].([]any)[0].(map[string]any)
+		var commits []any
+		for _, sha := range shas {
+			c := maps.Clone(publish)
+			c["sha"] = sha
+			if sha != first && sha != second {
+				c["commit"] = map[string]any{"author": map[string]any{"name": "Mario Rojas Padrón"}}
+			}
+			commits = append(commits, c)
+		}
+		body["commits"] = commits
+	})
+}
+
+// developerBump is a Developer's commit on main, which bumps the version
+// and is no Publish.
+const developerBump = "dddddddddddddddddddddddddddddddddddddddd"
+
+func TestASweepStartsWhereProductionWasLastSeenWhenNoVersionRuns(t *testing.T) {
+	// v1.0.0 is live, then v1.0.1 holds the first Publish, and v1.0.2
+	// only a Developer's commit, both cut before either rolled out. The
+	// service then knows no version that runs, and the rollout of v1.0.2
+	// failed. A sweep that saw v1.0.0 running starts from it, and reports
+	// the first Publish, which the rule for a server that remembers
+	// nothing, from the Release before the last, leaves out.
+	reason := recordedReason(t, "failed-170046.json")
+	a := answers(t)
+	a["compare/v1.0.0...main"] = comparedWith(t, first, developerBump)
+	a["compare/v1.0.1...main"] = comparedWith(t, developerBump)
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.set(at("18:58:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.0", "v1.0.0", rollout.Live, ""))
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Progress[first].Stage != Released {
+		t.Fatalf("Sweep at v1.0.0 = %+v, %v, want the first Publish released", sw, err)
+	}
+
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, reason))
+	f.set(at("19:10:00"), a)
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "its rollout failed"}
+	if err != nil || !maps.Equal(sw.Progress, map[string]Progress{first: failed}) {
+		t.Errorf("Sweep with no version running = %+v, %v, want the first Publish failed, since v1.0.0", sw, err)
+	}
+	want := []Failure{{SHA: first, Message: firstMessage, Version: failed.Version, Released: true, Reason: failed.Reason, Rollout: reason, ID: "rollout:" + first}}
+	if told := reporter.failures(); !slices.Equal(told, want) {
+		t.Errorf("the Developer was told of %+v, want %+v", told, want)
+	}
+
+	// A new Tracker, as after the server starts, remembers nothing, and
+	// starts from the Release before the last.
+	f, tracker = newFake(t)
+	f.set(at("19:10:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, reason))
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || len(sw.Progress) != 0 || f.asked["compare/v1.0.1...main"] != 1 || f.asked["compare/v1.0.0...main"] != 0 {
+		t.Errorf("Sweep remembering nothing = %+v, %v, want nothing swept, since v1.0.1", sw, err)
+	}
+}
+
+func TestASweepThatSawTheLastReleaseRunningReportsNothingWhileAPodRestarts(t *testing.T) {
+	// Live at v1.0.2, with a rollout signal of something else holding: the
+	// Pod restarts, and the service knows no version that runs. A sweep
+	// that saw v1.0.2 running starts from it, and reports none of v1.0.2's
+	// Publishes, which were live; the Release before the last would have
+	// had the second Publish reported as its rollout failing.
+	a := answers(t)
+	mainAt(t, a, second)
+	a["compare/v1.0.1...main"] = comparedWith(t, second)
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.set(at("19:05:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, ""))
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || len(sw.Progress) != 0 {
+		t.Fatalf("Sweep at v1.0.2 = %+v, %v, want nothing since it", sw, err)
+	}
+
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, recordedReason(t, "failed-171711-truncated.json")))
+	f.set(at("19:10:00"), a)
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || len(sw.Progress) != 0 || f.asked["compare/v1.0.1...main"] != 0 {
+		t.Errorf("Sweep while the Pod restarts = %+v, %v, want nothing, since v1.0.2", sw, err)
+	}
+	if told := reporter.failures(); len(told) != 0 {
+		t.Errorf("the Developer was told of %+v", told)
+	}
+}
+
+func TestASweepIgnoresARememberedReleaseThatIsNoLongerTagged(t *testing.T) {
+	// The sweep saw v1.0.2 running, and then v1.0.2's tag was deleted. With
+	// no version running and v1.0.1's rollout failing, it starts from the
+	// Release before the last, v1.0.0, and not from v1.0.2.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	a := answers(t)
+	mainAt(t, a, second)
+	f.set(at("19:05:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, ""))
+	if _, err := tracker.Sweep(t.Context(), sandbox); err != nil {
+		t.Fatal(err)
+	}
+
+	b := answers(t)
+	tagsUpTo(t, b, "v1.0.1")
+	mainAt(t, b, first)
+	f.set(at("19:10:00"), b)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Failed, recordedReason(t, "failed-170046.json")))
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	if err != nil || sw.Progress[first].Stage != Failed || f.asked["compare/v1.0.2...main"] != 1 {
+		t.Errorf("Sweep = %+v, %v, want the first Publish failed, since v1.0.0", sw, err)
+	}
+	if told := reporter.failures(); len(told) != 1 || told[0].ID != "rollout:"+first {
+		t.Errorf("the Developer was told of %+v, want the first Publish's rollout", told)
+	}
+}
+
 func TestASweepWhileTheClusterRecoversReportsNothing(t *testing.T) {
 	// The Site's Deployment and ImagePolicy are re-created, and the service
 	// knows neither version, with a reason. The sweep reads the last
@@ -440,5 +564,26 @@ func TestSweepingStaysWithinTheRateLimit(t *testing.T) {
 		if calls > c.calls || counted > c.counted {
 			t.Errorf("%s: %d calls, %d counted, want at most %d and %d", c.name, calls, counted, c.calls, c.counted)
 		}
+	}
+}
+
+func TestTheVersionLastSeenRunningIsSafeForConcurrentUse(t *testing.T) {
+	_, tracker := newFake(t)
+	tags := []tag{{version: release.Version{1, 0, 1}}, {version: release.Version{1, 0, 2}}}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			tracker.remember(sandbox.ID, fmt.Sprintf("v1.0.%d", 1+i%2))
+			if seen, ok := tracker.lastRan(sandbox.ID, tags); !ok || (seen != "v1.0.1" && seen != "v1.0.2") {
+				t.Errorf("lastRan = %q, %t", seen, ok)
+			}
+		})
+	}
+	wg.Wait()
+	// Each answer replaces the last, so a rollback moves it down.
+	tracker.remember(sandbox.ID, "v1.0.2")
+	tracker.remember(sandbox.ID, "v1.0.1")
+	if seen, ok := tracker.lastRan(sandbox.ID, tags); !ok || seen != "v1.0.1" {
+		t.Errorf("lastRan after a rollback = %q, %t, want v1.0.1", seen, ok)
 	}
 }

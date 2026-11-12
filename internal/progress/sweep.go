@@ -49,13 +49,16 @@ type Sweep struct {
 // after it was cut. Those Publishes are the ones since the Release
 // production runs, as the rollout status service tells it. When it tells
 // that production runs no version it knows, such as when the Site has no
-// Pod available, they are the ones since the Release before the target, so
-// that the target's own are swept too, when the target is a Release older
-// than the last, and otherwise since the Release before the last, so that
-// the last Release's own are; or all of main's when there is no Release
-// before it. When it does not answer, or tells a Release GitHub has no tag
-// of, they are the ones since the last Release, which GitHub alone can
-// fail. The Tracker's Reporter tells a failure once, however many sweeps
+// Pod available, they are the ones since the Release production was last
+// seen running, which the Tracker remembers from its sweeps' answers, when
+// that is still one of the Site's tags. With none remembered, as after the
+// server starts, since the Tracker keeps it in memory only, they are the
+// ones since the Release before the target, so that the target's own are
+// swept too, when the target is a Release older than the last, and
+// otherwise since the Release before the last, so that the last Release's
+// own are; or all of main's when there is no Release before it. When the
+// service does not answer, or tells a Release GitHub has no tag of, they
+// are the ones since the last Release, which GitHub alone can fail. The Tracker's Reporter tells a failure once, however many sweeps
 // find it, and the progress of each commit is a look that requests for it
 // share. The Publishes whose progress was not told are left to the next
 // sweep, and the error joins their errors, and the service's.
@@ -87,15 +90,22 @@ func (t *Tracker) Sweep(ctx context.Context, s site.Site) (Sweep, error) {
 		sw.Running = status.Running
 		switch {
 		case !atLeast(status.Running, release.Version{}):
-			// No version runs that the service knows, so the last Release
-			// does not run either, nor the target, whose rollout may be the
-			// one that failed.
-			since = previous
-			if before, ok := releaseBefore(tags, status.Target); ok {
+			// No version runs that the service knows: production is where
+			// it was last seen, or, with nothing remembered, before the
+			// target, whose rollout may be the one that failed, or before
+			// the last Release.
+			if seen, ok := t.lastRan(s.ID, tags); ok {
+				since = seen
+			} else if before, ok := releaseBefore(tags, status.Target); ok {
 				since = before
+			} else {
+				since = previous
 			}
-		case older(status.Running, last):
-			since = status.Running
+		default:
+			t.remember(s.ID, status.Running)
+			if older(status.Running, last) {
+				since = status.Running
+			}
 		}
 	}
 	commits, err := commitsSince(ctx, repo, since)
@@ -137,6 +147,36 @@ func older(running, last string) bool {
 	v, ok := strings.CutPrefix(last, "v")
 	l, isVersion := release.ParseVersion(v)
 	return ok && isVersion && atLeast(running, release.Version{}) && !atLeast(running, l)
+}
+
+// remember keeps running, a tag that names a version, as the version the
+// Site whose id is site was last seen running, in place of any earlier one.
+func (t *Tracker) remember(site, running string) {
+	name, _ := strings.CutPrefix(running, "v")
+	v, ok := release.ParseVersion(name)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ran[site] = v
+}
+
+// lastRan returns the tag of the version the Site whose id is site was last
+// seen running, and true when there is one and it is still one of tags.
+func (t *Tracker) lastRan(site string, tags []tag) (string, bool) {
+	t.mu.Lock()
+	v, ok := t.ran[site]
+	t.mu.Unlock()
+	if !ok {
+		return "", false
+	}
+	for _, tag := range tags {
+		if tag.version == v {
+			return "v" + v.String(), true
+		}
+	}
+	return "", false
 }
 
 // releaseBefore returns the tag of the Release before target, or "" when

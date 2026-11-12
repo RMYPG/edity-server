@@ -183,6 +183,11 @@ type Tracker struct {
 
 	mu     sync.Mutex
 	recent map[key]*look
+	// ran is the last version the rollout status service told a sweep each
+	// Site runs, by its id, when it named a version: where production was
+	// last seen, for a sweep to start from when the service no longer knows.
+	// It is in memory only, and a progress never reads it.
+	ran map[string]release.Version
 }
 
 type key struct{ site, sha string }
@@ -210,6 +215,7 @@ func New[R Repository](repository func(site.Repository) R, bot func(context.Cont
 		reporter:   reporter,
 		now:        time.Now,
 		recent:     map[key]*look{},
+		ran:        map[string]release.Version{},
 	}
 }
 
