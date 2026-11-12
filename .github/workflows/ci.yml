@@ -72,6 +72,7 @@ jobs:
             --env EDITY_ZITADEL_PROJECT_ID=ci \
             --env EDITY_ZITADEL_SERVICE_KEY="$service_key" \
             --env EDITY_SESSION_KEY="$(openssl rand -base64 32)" \
+            --env EDITY_SITE_STATUS_URL=http://site-status.invalid \
             edity-server:ci
           # Until the server listens, Docker's port proxy accepts a connection and
           # resets it, which --retry-connrefused doesn't cover.

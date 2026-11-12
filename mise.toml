@@ -29,6 +29,10 @@ EDITY_ZITADEL_CLIENT_ID = "dev"
 EDITY_ZITADEL_PROJECT_ID = "dev"
 EDITY_ZITADEL_SERVICE_KEY = { value = '''{{ exec(command=`node -e "const {privateKey: key} = require('node:crypto').generateKeyPairSync('rsa', {modulusLength: 2048, publicKeyEncoding: {type: 'spki', format: 'pem'}, privateKeyEncoding: {type: 'pkcs8', format: 'pem'}}); process.stdout.write(JSON.stringify({type: 'serviceaccount', keyId: 'dev', userId: 'dev', key}))"`, cache_key='edity-server-placeholder-service-key') }}''', tools = true }
 EDITY_SESSION_KEY = "{{ exec(command='head -c 32 /dev/urandom | base64') }}"
+# The platform's rollout status service answers only inside the cluster, so
+# outside it the progress of a released Publish answers 503. The name never
+# resolves (RFC 6761).
+EDITY_SITE_STATUS_URL = "http://site-status.invalid"
 
 [tasks.lint]
 description = "Lint the Go code, the OpenAPI file and the GitHub workflows"

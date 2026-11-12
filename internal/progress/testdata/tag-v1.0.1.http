@@ -1,0 +1,7 @@
+HTTP/2.0 200 OK
+Content-Type: application/json; charset=utf-8
+Etag: W/"83816c4d6f7b065d983ca7ac53c1be632a3252d679d8a2250e1ca542f7b24306"
+Last-Modified: Tue, 10 Nov 2026 16:52:21 GMT
+X-Github-Api-Version-Selected: 2026-03-10
+
+{"node_id":"TA_kwDOVWyoCNoAKDFjYTA4MjI5MzJhOWI2MmZmYmQzMDQzNThjYjJjMjY2ZWFiMmI2YzQ","sha":"1ca0822932a9b62ffbd304358cb2c266eab2b6c4","url":"https://api.github.com/repos/RMYPG/edity-sandbox/git/tags/1ca0822932a9b62ffbd304358cb2c266eab2b6c4","tagger":{"name":"github-actions[bot]","email":"41898282+github-actions[bot]@users.noreply.github.com","date":"2026-10-29T18:52:44Z"},"object":{"sha":"4bc931076ac8583bd8905a4c508c987877afc09d","type":"commit","url":"https://api.github.com/repos/RMYPG/edity-sandbox/git/commits/4bc931076ac8583bd8905a4c508c987877afc09d"},"tag":"v1.0.1","message":"Release v1.0.1\n","verification":{"verified":false,"reason":"unsigned","signature":null,"payload":null,"verified_at":null}}

@@ -1,6 +1,7 @@
 // Package progress works out how far a Publish has got: where the Release of
-// its commit is (P4). It asks the Site repository on GitHub each time, and
-// stores nothing (V8), so that no missed event can leave a Publish stuck.
+// its commit is, and whether the Site runs it (P4). It asks the Site
+// repository on GitHub and the platform's rollout status service each time,
+// and stores nothing (V8), so that no missed event can leave a Publish stuck.
 //
 // A Publish's commit is
 //
@@ -11,7 +12,12 @@
 //     release.yml pushes the vX.Y.Z tag only once the image of that version
 //     exists;
 //   - released once the highest vX.Y.Z tag contains it, whether that is the
-//     commit's own Release or a newer one (P8);
+//     commit's own Release or a newer one (P8), while the platform has not
+//     picked up its version or a newer one yet;
+//   - deploying once the platform has picked up its version or a newer one,
+//     its target, until the Site runs it;
+//   - live once the Site runs its version or a newer one (P8), whatever
+//     else holds, as released wins over what CI and Release on Publish did;
 //   - failed when one of its CI runs or its Release on Publish run failed,
 //     or when nothing came of it in time: no CI run some minutes after the
 //     commit, or, on a Site whose Release on Publish runs are named after
@@ -21,38 +27,50 @@
 //     whether this commit's Release is still to come. A CI run that GitHub
 //     keeps queued leaves the commit validating, with no deadline either:
 //     it starts once a runner is free, or the Developer cancels it, which
-//     fails the Publish.
+//     fails the Publish. Once released, it fails when the rollout of its
+//     target fails, when the platform reports a failure while its target is
+//     older than the Publish, as when the image scan fails, or when the Site
+//     still runs an older version an hour after the Publish's Release was
+//     tagged.
+//
+// The rollout status service answers how production's rollout stands, by
+// the Site's id (rollout.Client). An answer it does not give, whatever the
+// reason, is no answer: the Tracker returns an error, as when GitHub can't
+// be reached, so that the request is made again, and no deadline can fail a
+// Publish without the service's answer.
 //
 // The Editor tells the Client of a failed Publish that the Developer has
 // been notified (P5), so a Tracker answers failed only once its Reporter
 // has reported the failure to the Developer (V6). Its sweeps ask after
-// each Site's Publishes since its last Release every few minutes, so that a
-// failure is reported even when no Client asks about it.
-//
-// Deploying and live are ticket 33's.
+// each Site's Publishes that production does not run yet every few
+// minutes, so that a failure is reported even when no Client asks about it.
 package progress
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
 // A Stage is where the Release of a Publish's commit is.
 type Stage string
 
-// The stages GitHub tells.
+// The stages GitHub and the rollout status service tell.
 const (
 	Validating Stage = "validating"
 	Releasing  Stage = "releasing"
 	Released   Stage = "released"
+	Deploying  Stage = "deploying"
+	Live       Stage = "live"
 	Failed     Stage = "failed"
 )
 
@@ -78,12 +96,19 @@ type Failure struct {
 	// the version of the Release it was to become.
 	SHA, Message string
 	Version      release.Version
+	// Released tells that the Publish's Release was cut, and that what
+	// failed is its going live.
+	Released bool
 	// Run is the address of the run that failed, when one did, and Reason
 	// says what failed.
 	Run, Reason string
+	// Rollout is what the platform's rollout status service said failed,
+	// its reason, when the Release failed to go live and the service said
+	// why.
+	Rollout string
 	// ID tells this failure from every other on the Site, so that it is
-	// reported once: the run that failed and its attempt, or the deadline the
-	// commit missed. It has no spaces.
+	// reported once: the run that failed and its attempt, the deadline the
+	// commit missed, or the Publish whose rollout failed. It has no spaces.
 	ID string
 }
 
@@ -105,6 +130,14 @@ type Repository interface {
 	Get(ctx context.Context, path string, out any) error
 }
 
+// Rollouts is the platform's rollout status service, which tells how a
+// Site's rollout stands. *rollout.Client is one.
+type Rollouts interface {
+	// Status returns how the rollout of the Site whose id is site stands in
+	// environment, or an error when the service gives no answer.
+	Status(ctx context.Context, site, environment string) (rollout.Status, error)
+}
+
 const (
 	// reuse is how long a Progress answers again for the same commit, so
 	// that every browser tab polling it costs GitHub one look in that time.
@@ -119,7 +152,12 @@ const (
 	// was skipped or cancelled, or never started. Any run under way may
 	// still release it, as a newer Release.
 	releaseDeadline = 30 * time.Minute
-	// lookTimeout bounds one look at GitHub.
+	// liveDeadline is how long after its Release was tagged a Publish waits
+	// for the Site to run it or a newer Release. The platform picks a new
+	// tag up within minutes, and the rollout of a static Site takes a few
+	// more.
+	liveDeadline = 60 * time.Minute
+	// lookTimeout bounds one look at GitHub and the rollout status service.
 	lookTimeout = 20 * time.Second
 )
 
@@ -135,6 +173,7 @@ const releaseRuns = "actions/workflows/release-on-publish.yml/runs?event=workflo
 type Tracker struct {
 	repository func(site.Repository) Repository
 	bot        func(context.Context) (string, error)
+	rollouts   Rollouts
 	reporter   Reporter
 	now        func() time.Time
 
@@ -154,14 +193,16 @@ type look struct {
 }
 
 // New returns a Tracker that reaches a Site's repository through
-// repository, and tells a Publish's commit by its author, the login bot
-// returns: the publisher App's. It answers that a Publish failed only once
-// reporter has reported it to the Developer (P5). A nil reporter reports
-// nothing, for what only reads, such as mise run check:progress.
-func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), reporter Reporter) *Tracker {
+// repository, tells a Publish's commit by its author, the login bot
+// returns: the publisher App's, and asks rollouts whether production runs
+// a Release. It answers that a Publish failed only once reporter has
+// reported it to the Developer (P5). A nil reporter reports nothing, for
+// what only reads, such as mise run check:progress.
+func New[R Repository](repository func(site.Repository) R, bot func(context.Context) (string, error), rollouts Rollouts, reporter Reporter) *Tracker {
 	return &Tracker{
 		repository: func(r site.Repository) Repository { return repository(r) },
 		bot:        bot,
+		rollouts:   rollouts,
 		reporter:   reporter,
 		now:        time.Now,
 		recent:     map[key]*look{},
@@ -170,7 +211,8 @@ func New[R Repository](repository func(site.Repository) R, bot func(context.Cont
 
 // Progress returns how far the Publish whose commit is sha has got on s, or
 // ErrNotPublish. Requests for the same commit within a few seconds share one
-// look at GitHub.
+// look at GitHub and the rollout status service. When the service gives no
+// answer, the error is the service's *rollout.Error.
 func (t *Tracker) Progress(ctx context.Context, s site.Site, sha string) (Progress, error) {
 	// It goes into the calls' paths and queries as it is.
 	if !github.IsSHA(sha) {
@@ -222,8 +264,9 @@ func (t *Tracker) look(ctx context.Context, s site.Site, sha string, k key, l *l
 	close(l.done)
 }
 
-// workOut asks GitHub where the commit sha is, and, when the Publish
-// failed, what to report to the Developer.
+// workOut asks GitHub where the commit sha is, and the rollout status
+// service once it is released, and, when the Publish failed, what to report
+// to the Developer.
 func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progress, *Failure, error) {
 	repo := t.repository(s.Repository)
 	bot, err := t.bot(ctx)
@@ -257,15 +300,19 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 		return p, &Failure{SHA: sha, Message: commit.Message, Version: p.Version, Run: run, Reason: reason, ID: id}, nil
 	}
 
-	// A Release that contains the commit is the end, whatever its own runs
-	// did: a newer Publish's Release may have overtaken it.
-	released, err := releasedIn(ctx, repo, sha, v)
+	// A Release that contains the commit is the end of what GitHub tells,
+	// whatever its own runs did: a newer Publish's Release may have
+	// overtaken it. The rest is the rollout's.
+	first, released, err := releasedIn(ctx, repo, sha, v)
 	if err != nil {
 		return Progress{}, nil, err
 	}
 	if released {
-		p.Stage = Released
-		return p, nil, nil
+		return t.deployment(ctx, repo, s, p, first, func(kind, reason, rolloutReason string) (Progress, *Failure, error) {
+			p, failure, err := failed("", reason, kind+":"+sha)
+			failure.Released, failure.Rollout = true, rolloutReason
+			return p, failure, err
+		})
 	}
 
 	var ci runs
@@ -314,61 +361,175 @@ func (t *Tracker) workOut(ctx context.Context, s site.Site, sha string) (Progres
 	return p, nil, nil
 }
 
-// releasedIn tells whether the highest vX.Y.Z tag contains the commit sha,
-// whose version is v. Tags go on main's commits with rising versions, so a
-// Release older than v can't contain it, and the highest tells for every
-// other.
-func releasedIn(ctx context.Context, repo Repository, sha string, v release.Version) (bool, error) {
-	highest, tagged, err := highestRelease(ctx, repo)
+// releasedIn returns the Release that first contained the commit sha, whose
+// version is v, and true once the highest vX.Y.Z tag contains it. Tags go
+// on main's commits with rising versions, so a Release older than v can't
+// contain it, the highest tells for every other, and the lowest from v on is
+// the first that did: v's own, or the newer one that overtook it.
+func releasedIn(ctx context.Context, repo Repository, sha string, v release.Version) (tag, bool, error) {
+	tags, err := releaseTags(ctx, repo)
 	if err != nil {
-		return false, err
+		return tag{}, false, err
 	}
-	if !tagged || highest.Less(v) {
-		return false, nil
+	if len(tags) == 0 || tags[len(tags)-1].version.Less(v) {
+		return tag{}, false, nil
 	}
+	highest := tags[len(tags)-1]
 	var compared struct {
 		Status string `json:"status"`
 	}
-	if err := repo.Get(ctx, "compare/"+sha+"...v"+highest.String()+"?per_page=1", &compared); err != nil {
-		return false, err
+	if err := repo.Get(ctx, "compare/"+sha+"...v"+highest.version.String()+"?per_page=1", &compared); err != nil {
+		return tag{}, false, err
 	}
 	// The tag is ahead of the commit, or on it.
-	return compared.Status == "ahead" || compared.Status == "identical", nil
+	if compared.Status != "ahead" && compared.Status != "identical" {
+		return tag{}, false, nil
+	}
+	for _, t := range tags {
+		if !t.version.Less(v) {
+			return t, true, nil
+		}
+	}
+	return highest, true, nil
 }
 
 // LastRelease returns the tag of the Site's highest Release, such as
 // v1.0.2, or "" when it has none. Tags only ever go on main with rising
 // versions, so it is the last Release cut.
 func LastRelease(ctx context.Context, repo Repository) (string, error) {
-	highest, tagged, err := highestRelease(ctx, repo)
-	if err != nil || !tagged {
+	tags, err := releaseTags(ctx, repo)
+	if err != nil || len(tags) == 0 {
 		return "", err
 	}
-	return "v" + highest.String(), nil
+	return "v" + tags[len(tags)-1].version.String(), nil
 }
 
-// highestRelease returns the version of the highest vX.Y.Z tag, and false
-// when there is none.
-func highestRelease(ctx context.Context, repo Repository) (release.Version, bool, error) {
+// A tag is one of the Site's vX.Y.Z tags: the Release of its version.
+type tag struct {
+	version release.Version
+	// Object is what the tag's ref points to: an annotated tag, whose type
+	// is "tag", or a commit for a lightweight tag.
+	Object struct {
+		SHA  string `json:"sha"`
+		Type string `json:"type"`
+	} `json:"object"`
+}
+
+// releaseTags returns the Site's vX.Y.Z tags, lowest first.
+func releaseTags(ctx context.Context, repo Repository) ([]tag, error) {
 	var refs []struct {
 		Ref string `json:"ref"`
+		tag
 	}
 	err := repo.Get(ctx, "git/matching-refs/tags/v", &refs)
 	if errors.Is(err, github.ErrNotFound) {
-		return release.Version{}, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return release.Version{}, false, err
+		return nil, err
 	}
-	var highest release.Version
-	tagged := false
+	var tags []tag
 	for _, ref := range refs {
-		tag, ok := strings.CutPrefix(ref.Ref, "refs/tags/v")
-		if w, isVersion := release.ParseVersion(tag); ok && isVersion && (!tagged || highest.Less(w)) {
-			highest, tagged = w, true
+		name, ok := strings.CutPrefix(ref.Ref, "refs/tags/v")
+		if v, isVersion := release.ParseVersion(name); ok && isVersion {
+			ref.version = v
+			tags = append(tags, ref.tag)
 		}
 	}
-	return highest, tagged, nil
+	slices.SortFunc(tags, func(a, b tag) int {
+		switch {
+		case a.version.Less(b.version):
+			return -1
+		case b.version.Less(a.version):
+			return 1
+		}
+		return 0
+	})
+	return tags, nil
+}
+
+// taggedAt is when the tag t was made: an annotated tag's date, which
+// release.yml sets as it tags, or a lightweight tag's commit date. It is
+// zero when GitHub does not say.
+func taggedAt(ctx context.Context, repo Repository, t tag) (time.Time, error) {
+	if t.Object.Type == "commit" {
+		c, err := repo.GitCommit(ctx, t.Object.SHA)
+		return c.Committed, err
+	}
+	var annotated struct {
+		Tagger struct {
+			Date time.Time `json:"date"`
+		} `json:"tagger"`
+	}
+	err := repo.Get(ctx, "git/tags/"+t.Object.SHA, &annotated)
+	return annotated.Tagger.Date, err
+}
+
+// deployment works out where a released Publish p is, from the rollout
+// status of s's production and, until the Site runs it, from when first,
+// the Release that first contained it, was tagged. failed answers a
+// Publish whose Release failed to go live: kind names the failure in its
+// ID, reason says what failed, and rolloutReason is what the service said.
+func (t *Tracker) deployment(ctx context.Context, repo Repository, s site.Site, p Progress, first tag,
+	failed func(kind, reason, rolloutReason string) (Progress, *Failure, error),
+) (Progress, *Failure, error) {
+	status, err := t.rollouts.Status(ctx, s.ID, rollout.Production)
+	if err != nil {
+		return Progress{}, nil, err
+	}
+	stage, kind, reason := byStatus(p.Version, status)
+	switch stage {
+	case Live:
+		p.Stage = Live
+		return p, nil, nil
+	case Failed:
+		return failed(kind, reason, status.Reason)
+	}
+	// Only with the service's answer that the Site runs an older version
+	// can the hour pass.
+	at, err := taggedAt(ctx, repo, first)
+	if err != nil {
+		return Progress{}, nil, err
+	}
+	if !at.IsZero() && t.now().Sub(at) > liveDeadline {
+		return failed("not-live", fmt.Sprintf("not live %d minutes after its Release", int(liveDeadline.Minutes())), status.Reason)
+	}
+	p.Stage = stage
+	return p, nil, nil
+}
+
+// byStatus is where a released Publish whose version is v is by the rollout
+// status alone: Live, Deploying, Released, or Failed, with kind naming the
+// failure and reason saying what failed.
+//
+//   - Live once the Site runs v or a newer version, whatever else holds.
+//   - Failed when the rollout of the target failed while the target is v or
+//     newer, or when the service reports a failure while the target is
+//     older than v: the platform can't see v, as when the image scan fails.
+//   - Deploying while the target is v or newer.
+//   - Released otherwise, while the platform has yet to pick v up.
+func byStatus(v release.Version, status rollout.Status) (stage Stage, kind, reason string) {
+	targeted := atLeast(status.Target, v)
+	switch {
+	case atLeast(status.Running, v):
+		return Live, "", ""
+	case targeted && status.Phase == rollout.Failed:
+		return Failed, "rollout", "its rollout failed"
+	case targeted:
+		return Deploying, "", ""
+	case status.Reason != "":
+		return Failed, "no-target", "the platform did not pick up its Release"
+	}
+	return Released, "", ""
+}
+
+// atLeast tells whether the tag, such as v1.0.3, is of version v or a newer
+// one. A tag the service does not know, or that names no X.Y.Z version, is
+// older than every version, as the service's contract has it.
+func atLeast(tag string, v release.Version) bool {
+	name, ok := strings.CutPrefix(tag, "v")
+	w, isVersion := release.ParseVersion(name)
+	return ok && isVersion && !w.Less(v)
 }
 
 // runs is GitHub's list of workflow runs.

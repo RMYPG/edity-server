@@ -446,11 +446,13 @@ paths:
       tags: [Publish]
       summary: Progress of a Publish
       description: |
-        Where the Release of a Publish's commit is (P4). The server works it
-        out from GitHub on each request, and stores nothing (V8), so the
-        progress survives a reload and a restart of the server. A commit
-        counts as released once its Release or a newer one contains it, and
-        will count as live once the Site runs one of them (P8).
+        Where the Release of a Publish's commit is, and whether the Site runs
+        it (P4). The server works it out on each request from GitHub and,
+        once the commit is released, from the platform's rollout status
+        service, and stores nothing (V8), so the progress survives a reload
+        and a restart of the server. A commit counts as released once its
+        Release or a newer one contains it, and as live once the Site runs
+        one of them (P8).
 
         Requests for the same commit within 5 seconds get the same answer, so
         polling more often than that tells nothing more.
@@ -493,8 +495,10 @@ paths:
           description: |
             The edity-publisher GitHub App is not installed on the Site
             repository, or lacks a permission, or the repository's Issues are
-            turned off, so a failed Release can't be told to the Developer.
-            The Developer has to fix it.
+            turned off, so a failed Release can't be told to the Developer,
+            or the platform's rollout status service is not configured for
+            the Site. The Developer has to fix it. It is not an answer that
+            the Publish failed: the Editor asks again later.
           content:
             text/plain:
               schema:
@@ -502,9 +506,12 @@ paths:
         '503':
           description: |
             GitHub could not be reached or is limiting the server's requests,
-            so the progress is not known for now, or the Release failed and
-            the issue that tells the Developer is not written yet (P5). The
-            Editor asks again later.
+            or the platform's rollout status service could not be reached or
+            could not answer for the cluster, so the progress is not known for
+            now, or the Publish failed and the issue that tells the Developer
+            is not written yet (P5). The Editor asks again later. An answer
+            the rollout status service does not give never makes a Publish
+            `failed`.
           headers:
             Retry-After:
               description: How many seconds to wait before asking again, when the server knows.
@@ -753,22 +760,29 @@ components:
               once its image exists.
             - `released`: the commit's Release exists, or a newer one that
               contains the commit (P8), even if the commit's own CI or
-              Release failed.
-            - `deploying`: the Release is being deployed. On hold, not
-              reported yet (ticket 33).
-            - `live`: the Site runs the Release or a newer one (P8). On hold,
-              not reported yet (ticket 33).
+              Release failed, and the platform has yet to pick up its version
+              or a newer one.
+            - `deploying`: the platform has picked up the Release or a newer
+              one, and the Site does not run it yet.
+            - `live`: the Site runs the Release or a newer one (P8), whatever
+              else holds.
             - `failed`: a CI run on the commit failed, or the Release on
               Publish run that cuts its Release did, or nothing came of it in
               time: no CI run 10 minutes after the commit, or no Release 30
               minutes after CI passed while no Release on Publish run is
               under way, on a Site whose Release on Publish runs are named
               after their commits. A CI run that waits for a runner keeps the
-              commit `validating`. The changes are saved but not live, and the Developer has
-              been told: an issue on the Site repository says what failed and
-              links to the run (P5, V6). The server answers `failed` only once
+              commit `validating`. Once released, the rollout of the version
+              the platform picked up failed, or the platform reports a failure
+              while it has not picked up the Release, as when the image scan
+              fails, or the Site still runs an older version 60 minutes after
+              the Release was tagged. The changes are saved but not live, and
+              the Developer has been told: an issue on the Site repository
+              says what failed and links to the run, or quotes the rollout
+              status service (P5, V6). The server answers `failed` only once
               that issue is written, and 503 until then. It is not the end: a
-              newer Release that contains the commit makes it `released`.
+              newer Release that contains the commit makes it `released`, and
+              the Site running the Release or a newer one makes it `live`.
           type: string
           enum: [validating, releasing, released, deploying, live, failed]
         version:

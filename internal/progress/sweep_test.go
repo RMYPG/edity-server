@@ -15,8 +15,16 @@ import (
 
 	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
+	"github.com/RMYPG/edity-server/internal/rollouttest"
 	"github.com/RMYPG/edity-server/internal/site"
 )
+
+// liveAt is production running the Release tag, which the platform picked
+// up last.
+func liveAt(t testing.TB, tag string) func(*fakeGitHub) {
+	return func(f *fakeGitHub) { f.status.Set(sandbox.ID, productionAt(t, tag, tag, rollout.Live, "")) }
+}
 
 // mainAt is a's answers to what a sweep asks, as GitHub answered them while
 // main was the first Publish (first) or the second (second): the commits on
@@ -59,8 +67,9 @@ func TestASweepReportsAFailedPublishNoOneAsksAbout(t *testing.T) {
 }
 
 func TestASweepAsksOnlyAboutPublishesSinceTheLastRelease(t *testing.T) {
-	// All released: nothing since v1.0.2.
+	// All released, and production runs v1.0.2: nothing since.
 	f, tracker := newFake(t)
+	liveAt(t, "v1.0.2")(f)
 	a := answers(t)
 	mainAt(t, a, second)
 	f.set(at("19:05:00"), a)
@@ -85,6 +94,68 @@ func TestASweepAsksOnlyAboutPublishesSinceTheLastRelease(t *testing.T) {
 	}
 	if f.asked["git/commits/"+developer] != 0 {
 		t.Error("a sweep asked about a Developer's commit")
+	}
+}
+
+func TestASweepReportsARolloutThatFailsAfterTheRelease(t *testing.T) {
+	// The first Publish is released as v1.0.1, so nothing is since the
+	// last Release, but production still runs v1.0.0 and the rollout of
+	// v1.0.1 failed.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	reason := recordedReason(t, "failed-170046.json")
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "v1.0.0", rollout.Failed, reason))
+	a := answers(t)
+	tagsUpTo(t, a, "v1.0.1")
+	mainAt(t, a, first)
+	f.set(at("18:58:00"), a)
+
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "its rollout failed"}
+	if sw.Release != "v1.0.1" || sw.Running != "v1.0.0" || !maps.Equal(sw.Progress, map[string]Progress{first: failed}) {
+		t.Errorf("Sweep = %+v, want the first Publish failed, since v1.0.0", sw)
+	}
+	want := []Failure{{SHA: first, Message: firstMessage, Version: failed.Version, Released: true, Reason: failed.Reason, Rollout: reason, ID: "rollout:" + first}}
+	if told := reporter.failures(); !slices.Equal(told, want) {
+		t.Errorf("the Developer was told of %+v, want %+v", told, want)
+	}
+
+	// Once production runs it, there is nothing to sweep.
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "v1.0.1", rollout.Live, ""))
+	f.set(at("19:30:00"), a)
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Running != "v1.0.1" || len(sw.Progress) != 0 {
+		t.Errorf("Sweep once it runs = %+v, %v, want nothing since v1.0.1", sw, err)
+	}
+}
+
+func TestASweepWithoutTheRolloutStatusSweepsSinceTheLastRelease(t *testing.T) {
+	// The service can't be reached: what GitHub tells is still reported.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.status.Down(true)
+	a := ciFailed(t)
+	mainAt(t, a, first)
+	f.set(at("18:52:20"), a)
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	var e *rollout.Error
+	if !errors.As(err, &e) || sw.Release != "v1.0.0" || sw.Running != "" || sw.Progress[first].Stage != Failed || len(reporter.failures()) != 1 {
+		t.Errorf("Sweep = %+v, %v, want the first Publish failed, and the service's error", sw, err)
+	}
+
+	// Production runs a tag GitHub has no Release of: since the last
+	// Release.
+	f, tracker = newFake(t)
+	f.status.Set(sandbox.ID, productionAt(t, "v0.9.0", "v0.9.0", rollout.Live, ""))
+	a = answers(t)
+	mainAt(t, a, second)
+	f.set(at("19:05:00"), a)
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Running != "v0.9.0" || len(sw.Progress) != 0 || f.asked["compare/v0.9.0...main"] != 1 {
+		t.Errorf("Sweep = %+v, %v, want nothing since v1.0.2, once v0.9.0 was not found", sw, err)
 	}
 }
 
@@ -140,6 +211,7 @@ func (b *syncBuffer) String() string {
 
 func TestSweepsLogEachSweepAndStopWithTheServer(t *testing.T) {
 	f, tracker := newFake(t)
+	liveAt(t, "v1.0.2")(f)
 	a := answers(t)
 	mainAt(t, a, second)
 	f.set(at("19:05:00"), a)
@@ -155,7 +227,7 @@ func TestSweepsLogEachSweepAndStopWithTheServer(t *testing.T) {
 	for strings.Count(logs.String(), `"msg":"swept"`) < 2 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(logs.String(), `"msg":"swept","site":"edity-sandbox","release":"v1.0.2","publishes":0,"failed":0,"left":0`) {
+	if !strings.Contains(logs.String(), `"msg":"swept","site":"edity-sandbox","release":"v1.0.2","running":"v1.0.2","publishes":0,"failed":0,"left":0`) {
 		t.Errorf("the sweeps logged:\n%s", logs.String())
 	}
 	stop()
@@ -168,20 +240,26 @@ func TestSweepsLogEachSweepAndStopWithTheServer(t *testing.T) {
 
 // TestSweepingStaysWithinTheRateLimit counts what the sweeps cost the
 // installation's rate limit, the 5,000 calls an hour that every Site
-// shares, in the hour of a Site with no Publish since its last Release, and
-// in the hour of one whose Publish stays under way all along. GitHub does
-// not count a call it answers 304.
+// shares, in the hour of a Site with no Publish since the Release
+// production runs, of one whose Publish stays under way all along, and of
+// one whose Release production does not run yet all along. GitHub does not
+// count a call it answers 304.
 //
-// A sweep of a Site with nothing since its last Release makes 2 calls: the
-// tags and the comparison of the last one with main, 24 an hour. A Publish
-// since then adds the 5 calls of a look at its progress. Each answer is
-// counted the first time, again when the token is replaced, and when it
-// changes, so an hour of sweeps costs a few calls for each Site, and a
-// few more for each Publish under way: next to the Editor's polling
+// A sweep of a Site with nothing since its last Release, which production
+// runs, makes 2 calls: the tags and the comparison of the last one with
+// main, 24 an hour. A Publish since then, or since the Release production
+// runs, adds the 5 calls of a look at its progress. The rollout status
+// service, asked once a sweep and once a look at a released Publish, is not
+// GitHub's, and has no rate limit. Each answer is counted the first time,
+// again when the token is replaced, and when it changes, so an hour of
+// sweeps costs a few calls for each Site, and a few more for each Publish
+// under way: next to the Editor's polling
 // (TestPollingStaysWithinTheRateLimit), nothing.
 func TestSweepingStaysWithinTheRateLimit(t *testing.T) {
 	releasing := firstPublish(t)[4]
 	mainAt(t, releasing.answers, first)
+	deploying := firstPublish(t)[6]
+	mainAt(t, deploying.answers, first)
 	idle := answers(t)
 	mainAt(t, idle, second)
 
@@ -189,13 +267,16 @@ func TestSweepingStaysWithinTheRateLimit(t *testing.T) {
 		name           string
 		from           time.Time
 		a              map[string]githubtest.Response
+		status         rollouttest.Answer
 		stage          Stage
 		calls, counted int
 	}{
-		{"no Publish since the last Release", at("19:05:00"), idle, "", 25, 5},
-		{"a Publish releasing all along", releasing.from, releasing.answers, Releasing, 85, 13},
+		{"no Publish since the last Release", at("19:05:00"), idle, productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, ""), "", 25, 5},
+		{"a Publish releasing all along", releasing.from, releasing.answers, stillAtV100(t), Releasing, 85, 13},
+		{"a Release deploying all along", deploying.from, deploying.answers, deploying.status, Deploying, 85, 13},
 	} {
 		f, tracker := newFake(t)
+		f.status.Set(sandbox.ID, c.status)
 		for now := c.from; now.Before(c.from.Add(time.Hour)); now = now.Add(SweepPeriod) {
 			f.set(now, c.a)
 			sw, err := tracker.Sweep(t.Context(), sandbox)

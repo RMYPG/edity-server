@@ -23,6 +23,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollouttest"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -65,7 +66,31 @@ var (
 		Reason: "no CI run 10 minutes after the commit",
 		ID:     "no-ci:" + second,
 	}
+	// notLive is the first Publish released, and not live an hour after.
+	notLive = progress.Failure{
+		SHA: first, Message: publishMessage, Version: release.Version{1, 0, 1}, Released: true,
+		Reason: "not live 60 minutes after its Release",
+		ID:     "not-live:" + first,
+	}
 )
+
+// rolloutFailed is the second Publish released, and its rollout failed,
+// with the reason the rollout status service gave live at 17:00:46 on
+// 2026-11-10.
+func rolloutFailed(t testing.TB) progress.Failure {
+	t.Helper()
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rollouttest.Recorded(t, "failed-170046.json").Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	return progress.Failure{
+		SHA: second, Message: publishMessage, Version: release.Version{1, 0, 2}, Released: true,
+		Reason: "its rollout failed", Rollout: body.Reason,
+		ID: "rollout:" + second,
+	}
+}
 
 // tagsUpTo is the recorded tag list down to the tags up to last.
 func tagsUpTo(t testing.TB, last string) githubtest.Response {
@@ -411,7 +436,7 @@ func TestRepeatedFailuresUpdateTheSameOpenIssue(t *testing.T) {
 	// The first failure opens the issue.
 	report(r, ciFailed)
 	opened := f.opened()
-	if len(opened) != 1 || opened[0].number != 5 || opened[0].title != "Edity: a Publish was not released" || opened[0].state != "open" {
+	if len(opened) != 1 || opened[0].number != 5 || opened[0].title != "Edity: a Publish is not live" || opened[0].state != "open" {
 		t.Fatalf("issues opened: %+v, want one, #5", opened)
 	}
 	if told := toldOn(t, opened[0]); told != ciFailed.ID {
@@ -467,11 +492,51 @@ func TestRepeatedFailuresUpdateTheSameOpenIssue(t *testing.T) {
 	}
 }
 
+func TestARolloutThatFailsIsToldOnTheOpenFailureIssue(t *testing.T) {
+	f := newFake(t)
+	r := f.reporter(t)
+	for _, failure := range []progress.Failure{ciFailed, rolloutFailed(t), notLive, rolloutFailed(t)} {
+		if err := r.ReportFailure(t.Context(), sandbox, failure); err != nil {
+			t.Fatalf("ReportFailure(%s): %v", failure.ID, err)
+		}
+	}
+	opened := f.opened()
+	comments := f.commentsOn(5)
+	if len(opened) != 1 || len(comments) != 2 || comments[0] != failureText(rolloutFailed(t)) || comments[1] != failureText(notLive) {
+		t.Fatalf("issues %+v, with comments %q, want #5 alone, with the rollout and the missed hour", opened, comments)
+	}
+	if want := ciFailed.ID + " " + rolloutFailed(t).ID + " " + notLive.ID; toldOn(t, opened[0]) != want {
+		t.Errorf("issue #5 lists %q as told, want %q", toldOn(t, opened[0]), want)
+	}
+}
+
 func TestAFailureSaysWhatFailedForWhichPublish(t *testing.T) {
 	for _, c := range []struct {
 		failure progress.Failure
 		want    string
 	}{
+		{rolloutFailed(t), "### v1.0.2 was released but is not live\n\n" +
+			"Its rollout failed. The platform's rollout status service says:\n\n" +
+			"```text\n" +
+			`Deployment edity-sandbox/edity-sandbox-sws: Progressing=False (ProgressDeadlineExceeded): ReplicaSet "edity-sandbox-sws-594f98bf45" has timed out progressing.` + "\n" +
+			`HelmRelease edity-sandbox/edity-sandbox: Released=False (UpgradeFailed): Helm upgrade failed for release edity-sandbox/edity-sandbox with chart sws@0.1.0+d4be20fd838f: failed early due to stalled resources: [Deployment/edity-sandbox/edity-sandbox-sws status: 'Failed']` + "\n" +
+			`Kustomization flux-system/edity-sandbox: Ready=False (HealthCheckFailed): health check failed after 5m0.025786058s: timeout waiting for: [HelmRelease/edity-sandbox/edity-sandbox status: 'InProgress']` + "\n" +
+			"```\n\n" +
+			"Edity end-to-end check published `home` in f50d2c45e28706d25da874225f0f64770cd1ac12, which changed:\n\n" +
+			"- `hero.cta`"},
+		{notLive, "### v1.0.1 was released but is not live\n\n" +
+			"Not live 60 minutes after its Release.\n\n" +
+			"Edity end-to-end check published `home` in 4bc931076ac8583bd8905a4c508c987877afc09d, which changed:\n\n" +
+			"- `hero.cta`"},
+		// A reason that holds a fence of its own, and Markdown, stays in
+		// the code block.
+		{progress.Failure{
+			SHA: first, Version: release.Version{1, 0, 1}, Released: true, Reason: "the platform did not pick up its Release", ID: "no-target:" + first,
+			Rollout: "ImageRepository flux-system/x: Ready=False (Failed): ```\n@MarioRP-01 <b>#4</b>", Message: "Not a Publish's",
+		}, "### v1.0.1 was released but is not live\n\n" +
+			"The platform did not pick up its Release. The platform's rollout status service says:\n\n" +
+			"````text\nImageRepository flux-system/x: Ready=False (Failed): ```\n@MarioRP-01 <b>#4</b>\n````\n\n" +
+			"The Publish is 4bc931076ac8583bd8905a4c508c987877afc09d."},
 		{ciFailed, "### v1.0.1 was not released\n\n" +
 			"CI ended failure. [See the run](https://github.com/RMYPG/edity-sandbox/actions/runs/40934506192).\n\n" +
 			"Edity end-to-end check published `home` in 4bc931076ac8583bd8905a4c508c987877afc09d, which changed:\n\n" +
@@ -585,5 +650,12 @@ func TestWithToldKeepsTheRestOfTheBody(t *testing.T) {
 	}
 	if kept := toldIn(told(many)); len(kept) != maxTold || kept[0] != "run:5/1" {
 		t.Errorf("told keeps %d keys from %s, want the last %d", len(kept), kept[0], maxTold)
+	}
+}
+
+func TestARolloutReasonIsQuotedUpToItsLimit(t *testing.T) {
+	long := strings.Repeat("é", maxRollout+10)
+	if got, want := rolloutReason(long), "```text\n"+strings.Repeat("é", maxRollout)+"…\n```"; got != want {
+		t.Errorf("rolloutReason quotes %d characters, want %d and an ellipsis", len([]rune(got)), len([]rune(want)))
 	}
 }

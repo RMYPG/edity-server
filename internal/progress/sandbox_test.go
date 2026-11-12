@@ -15,16 +15,21 @@ import (
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
+	"github.com/RMYPG/edity-server/internal/rollouttest"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
 // TestProgressOnTheSandbox reads the progress of the two Publishes that
 // mise run check:sandbox made on RMYPG/edity-sandbox on 2026-10-29, as the
 // edity-publisher App that made them, with the configuration mise run dev
-// reads: both are released, as v1.0.1 and v1.0.2. The Developer commit before
-// them is not a Publish's. Asked again, GitHub answers every call 304, which
-// its rate limit does not count. It only reads, and gets an installation
-// token.
+// reads: both are released, as v1.0.1 and v1.0.2, and live, since production
+// runs a newer Release. The Developer commit before them is not a
+// Publish's. Asked again, GitHub answers every call 304, which its rate
+// limit does not count. It only reads, and gets an installation token.
+//
+// The rollout status service answers only inside the cluster, so it answers
+// here as it did live on 2026-11-10, with production at v1.0.8.
 //
 // mise run check:progress runs it. It is not part of mise run ci.
 func TestProgressOnTheSandbox(t *testing.T) {
@@ -39,14 +44,17 @@ func TestProgressOnTheSandbox(t *testing.T) {
 	}
 	calls := &countingTransport{}
 	app := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 30 * time.Second, Transport: calls})
+	status := rollouttest.NewService(t)
+	status.Set(sandbox.ID, rollouttest.Recorded(t, "live-1617.json"))
+	rollouts := rollout.New(status.URL, &http.Client{Timeout: 5 * time.Second})
 	tracker := func() *progress.Tracker {
 		// It only reads, so it tells no one of a failure.
-		return progress.New(func(r site.Repository) progress.Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, nil)
+		return progress.New(func(r site.Repository) progress.Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, rollouts, nil)
 	}
 
 	want := map[string]progress.Progress{
-		"4bc931076ac8583bd8905a4c508c987877afc09d": {Stage: progress.Released, Version: release.Version{1, 0, 1}},
-		"f50d2c45e28706d25da874225f0f64770cd1ac12": {Stage: progress.Released, Version: release.Version{1, 0, 2}},
+		"4bc931076ac8583bd8905a4c508c987877afc09d": {Stage: progress.Live, Version: release.Version{1, 0, 1}},
+		"f50d2c45e28706d25da874225f0f64770cd1ac12": {Stage: progress.Live, Version: release.Version{1, 0, 2}},
 	}
 	first := tracker()
 	for sha, w := range want {
