@@ -132,6 +132,57 @@ func TestASweepReportsARolloutThatFailsAfterTheRelease(t *testing.T) {
 	}
 }
 
+func TestASweepReportsAFailureOfTheLastReleaseWhenNoVersionRuns(t *testing.T) {
+	// The first Publish is released as v1.0.1, and the Site has no Pod
+	// available, as when its first install fails: the service knows no
+	// version that runs.
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	reason := recordedReason(t, "failed-170046.json")
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Failed, reason))
+	a := answers(t)
+	tagsUpTo(t, a, "v1.0.1")
+	mainAt(t, a, first)
+	f.set(at("18:58:00"), a)
+
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "its rollout failed"}
+	if sw.Release != "v1.0.1" || sw.Running != "" || !maps.Equal(sw.Progress, map[string]Progress{first: failed}) {
+		t.Errorf("Sweep = %+v, want the first Publish failed, since v1.0.0", sw)
+	}
+	want := []Failure{{SHA: first, Message: firstMessage, Version: failed.Version, Released: true, Reason: failed.Reason, Rollout: reason, ID: "rollout:" + first}}
+	if told := reporter.failures(); !slices.Equal(told, want) {
+		t.Errorf("the Developer was told of %+v, want %+v", told, want)
+	}
+
+	// A Pod restarting, long after the tag, is swept the same way, and
+	// tells the Developer of nothing.
+	f, tracker = newFake(t)
+	reporter = &fakeReporter{}
+	tracker.reporter = reporter
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Deploying, ""))
+	f.set(at("21:00:00"), a)
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Progress[first].Stage != Deploying || len(reporter.failures()) != 0 {
+		t.Errorf("Sweep = %+v, %v, told %+v, want the first Publish deploying, and nothing told", sw, err, reporter.failures())
+	}
+
+	// With a single Release, the last is all of main's.
+	f, tracker = newFake(t)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "", rollout.Deploying, ""))
+	b := answers(t)
+	tagsUpTo(t, b, "v1.0.1")
+	withoutTag(t, b, "v1.0.0")
+	mainAt(t, b, first)
+	f.set(at("18:58:00"), b)
+	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || sw.Progress[first].Stage != Deploying || f.asked["commits?sha=main&per_page=100"] != 1 {
+		t.Errorf("Sweep = %+v, %v, want the first Publish deploying, from main's commits", sw, err)
+	}
+}
+
 func TestASweepWithoutTheRolloutStatusSweepsSinceTheLastRelease(t *testing.T) {
 	// The service can't be reached: what GitHub tells is still reported.
 	f, tracker := newFake(t)

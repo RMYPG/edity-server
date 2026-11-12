@@ -121,6 +121,24 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			status: productionAt(t, "v1.0.1", "", rollout.Deploying, ""),
 			want:   Progress{Stage: Deploying, Version: v101},
 		},
+		// With nothing failing, a Pod restarting is no Release that did
+		// not go live, however long after its tag.
+		"deploying: the pod restarting, an hour after its tag": {
+			sha: first, now: at("21:00:00"), edit: onlyFirst,
+			status: productionAt(t, "v1.0.1", "", rollout.Deploying, ""),
+			want:   Progress{Stage: Deploying, Version: v101},
+		},
+		"released: the pod restarting, an hour after its tag, the platform yet to pick it up": {
+			sha: first, now: at("21:00:00"), edit: onlyFirst,
+			status: productionAt(t, "v1.0.0", "", rollout.Deploying, ""),
+			want:   Progress{Stage: Released, Version: v101},
+		},
+		"failed: no version running an hour after its tag, with what the service says": {
+			sha: first, now: at("21:00:00"), edit: onlyFirst,
+			status:  productionAt(t, "v1.0.1", "", rollout.Deploying, "Deployment edity-sandbox/edity-sandbox-sws not found"),
+			want:    Progress{Stage: Failed, Version: v101, Reason: "not live 60 minutes after its Release"},
+			failure: "not-live:" + first, rollout: "Deployment edity-sandbox/edity-sandbox-sws not found",
+		},
 		"deploying: picked up while the image scan fails": {
 			sha: first, now: at("18:56:00"), edit: onlyFirst,
 			status: productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, scanFailing),

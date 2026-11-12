@@ -47,9 +47,13 @@ type Sweep struct {
 // reported to the Developer even when no Client asks for it (V6): a Client
 // who closes the tab stops asking, and a Release whose rollout fails does so
 // after it was cut. Those Publishes are the ones since the Release
-// production runs, as the rollout status service tells it, or since the
-// last Release when the service does not tell, or tells one GitHub has no
-// tag of. The Tracker's Reporter tells a failure once, however many sweeps
+// production runs, as the rollout status service tells it. When it tells
+// that production runs no version it knows, such as when the Site has no
+// Pod available, they are the ones since the Release before the last, so
+// that the last Release's own are swept too, or all of main's when there
+// is no Release before it. When it does not answer, or tells a Release
+// GitHub has no tag of, they are the ones since the last Release, which
+// GitHub alone can fail. The Tracker's Reporter tells a failure once, however many sweeps
 // find it, and the progress of each commit is a look that requests for it
 // share. The Publishes whose progress was not told are left to the next
 // sweep, and the error joins their errors, and the service's.
@@ -59,9 +63,17 @@ func (t *Tracker) Sweep(ctx context.Context, s site.Site) (Sweep, error) {
 	if err != nil {
 		return Sweep{}, err
 	}
-	last, err := LastRelease(ctx, repo)
+	tags, err := releaseTags(ctx, repo)
 	if err != nil {
 		return Sweep{}, err
+	}
+	// The last Release, and the one before it, as tags, or "".
+	var last, previous string
+	if n := len(tags); n > 0 {
+		last = "v" + tags[n-1].version.String()
+		if n > 1 {
+			previous = "v" + tags[n-2].version.String()
+		}
 	}
 	sw := Sweep{Release: last, Progress: map[string]Progress{}}
 	var errs []error
@@ -71,7 +83,12 @@ func (t *Tracker) Sweep(ctx context.Context, s site.Site) (Sweep, error) {
 		errs = append(errs, err)
 	} else {
 		sw.Running = status.Running
-		if older(status.Running, last) {
+		switch {
+		case !atLeast(status.Running, release.Version{}):
+			// No version runs that the service knows, so the last Release
+			// does not run either.
+			since = previous
+		case older(status.Running, last):
 			since = status.Running
 		}
 	}
@@ -108,7 +125,8 @@ func (t *Tracker) Sweep(ctx context.Context, s site.Site) (Sweep, error) {
 }
 
 // older tells whether running, the tag production runs, is of an older
-// Release than last, the tag of the last Release.
+// Release than last, the tag of the last Release. A running that names no
+// version is older than none.
 func older(running, last string) bool {
 	v, ok := strings.CutPrefix(last, "v")
 	l, isVersion := release.ParseVersion(v)

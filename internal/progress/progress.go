@@ -31,7 +31,9 @@
 //     target fails, when the platform reports a failure while its target is
 //     older than the Publish, as when the image scan fails, or when the Site
 //     still runs an older version an hour after the Publish's Release was
-//     tagged.
+//     tagged. A Site that runs no version the service knows, with nothing
+//     failing, is a Pod restarting, not a Release that did not go live, so
+//     the hour does not count then.
 //
 // The rollout status service answers how production's rollout stands, by
 // the Site's id (rollout.Client). An answer it does not give, whatever the
@@ -486,7 +488,14 @@ func (t *Tracker) deployment(ctx context.Context, repo Repository, s site.Site, 
 		return failed(kind, reason, status.Reason)
 	}
 	// Only with the service's answer that the Site runs an older version
-	// can the hour pass.
+	// can the hour pass. A Site with no version running and no reason is,
+	// as the contract has it, a Pod between two lives, as when it restarts:
+	// failing then would tell the Developer of nothing, and use up the
+	// Failure's ID for when something does fail.
+	if status.Running == "" && status.Reason == "" {
+		p.Stage = stage
+		return p, nil, nil
+	}
 	at, err := taggedAt(ctx, repo, first)
 	if err != nil {
 		return Progress{}, nil, err
