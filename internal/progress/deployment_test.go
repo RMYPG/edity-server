@@ -348,15 +348,25 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 			want:    Progress{Stage: Failed, Version: v101, Reason: "its rollout failed"},
 			failure: "rollout:" + first, rollout: recorded,
 		},
-		"failed: an hour after the commit of a lightweight tag": {
-			sha: first, now: at("19:50:02"),
+		// A lightweight tag has no date of its own, and its commit's is not
+		// when it was tagged: it sets no deadline.
+		"deploying: a lightweight tag sets no deadline": {
+			sha: first, now: at("21:00:00"),
 			edit: func(t *testing.T, a map[string]githubtest.Response) {
 				tagsUpTo(t, a, "v1.0.1")
 				lightweight(t, a, "v1.0.1", first)
 			},
-			status:  productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, ""),
-			want:    Progress{Stage: Failed, Version: v101, Reason: "not live 60 minutes after its Release"},
-			failure: "not-live:" + first,
+			status: productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, ""),
+			want:   Progress{Stage: Deploying, Version: v101},
+		},
+		"released: a lightweight tag sets no deadline": {
+			sha: first, now: at("21:00:00"),
+			edit: func(t *testing.T, a map[string]githubtest.Response) {
+				tagsUpTo(t, a, "v1.0.1")
+				lightweight(t, a, "v1.0.1", first)
+			},
+			status: stillAtV100(t),
+			want:   Progress{Stage: Released, Version: v101},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -384,6 +394,20 @@ func TestEachDeploymentStageFromTheRolloutStatus(t *testing.T) {
 				t.Errorf("the rollout status service was asked %d times, want once", f.status.Asked(sandbox.ID))
 			}
 		})
+	}
+}
+
+func TestALightweightTagIsNotAskedAbout(t *testing.T) {
+	// v1.0.1 tagged by hand, lightweight, on a commit long before it: the
+	// commit's date would have failed the Publish at once.
+	f, tracker := newFake(t)
+	a := answers(t)
+	tagsUpTo(t, a, "v1.0.1")
+	lightweight(t, a, "v1.0.1", developer)
+	f.set(at("21:00:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, ""))
+	if p, err := tracker.Progress(t.Context(), sandbox, first); err != nil || p.Stage != Deploying || f.asked["git/commits/"+developer] != 0 {
+		t.Errorf("Progress = %+v, %v, with the tagged commit asked about %d times, want deploying, and never", p, err, f.asked["git/commits/"+developer])
 	}
 }
 

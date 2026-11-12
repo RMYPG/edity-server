@@ -453,12 +453,14 @@ func releaseTags(ctx context.Context, repo Repository) ([]tag, error) {
 }
 
 // taggedAt is when the tag t was made: an annotated tag's date, which
-// release.yml sets as it tags, or a lightweight tag's commit date. It is
-// zero when GitHub does not say.
+// release.yml sets as it tags, since it only pushes annotated tags. It is
+// zero, which sets no deadline, when GitHub does not say, and for a
+// lightweight tag, which has no date of its own: its commit's is not when
+// it was tagged, as with a commit tagged by hand an hour later. GitHub is
+// not asked about a lightweight tag.
 func taggedAt(ctx context.Context, repo Repository, t tag) (time.Time, error) {
 	if t.Object.Type == "commit" {
-		c, err := repo.GitCommit(ctx, t.Object.SHA)
-		return c.Committed, err
+		return time.Time{}, nil
 	}
 	var annotated struct {
 		Tagger struct {
