@@ -3,6 +3,7 @@ package rollout_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,9 +108,16 @@ func TestEveryAnswerThatIsNotAStatusIsAnError(t *testing.T) {
 		"watches not synced, or failing":           {rollouttest.Error(t, http.StatusServiceUnavailable, "watches not synced"), http.StatusServiceUnavailable, false},
 		"a proxy's 502 with no JSON":               {rollouttest.Answer{Status: http.StatusBadGateway, Body: []byte("<html>Bad Gateway</html>")}, http.StatusBadGateway, false},
 		"not JSON":                                 {rollouttest.Answer{Status: http.StatusOK, Body: []byte("ok")}, http.StatusOK, false},
-		"no phase":                                 {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"target":"v1.0.8","running":"v1.0.8"}`)}, http.StatusOK, false},
-		"a phase this server does not know":        {rollouttest.Synthetic(t, "v1.0.8", "v1.0.7", "paused", ""), http.StatusOK, false},
-		"too big":                                  {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"reason":"` + strings.Repeat("x", 1<<20) + `"}`)}, http.StatusOK, false},
+		"no phase":                                 {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"target":"v1.0.8","running":"v1.0.8","reason":null}`)}, http.StatusOK, false},
+		"a null phase":                             {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"target":"v1.0.8","running":"v1.0.8","phase":null,"reason":null}`)}, http.StatusOK, false},
+		// A missing key is not a null one: read as null, it would count as
+		// a version older than every Publish.
+		"no versions":                       {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"phase":"deploying"}`)}, http.StatusOK, false},
+		"no target":                         {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"running":"v1.0.7","phase":"deploying","reason":null}`)}, http.StatusOK, false},
+		"no running":                        {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"target":"v1.0.8","phase":"deploying","reason":null}`)}, http.StatusOK, false},
+		"no reason":                         {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"target":"v1.0.8","running":"v1.0.7","phase":"deploying"}`)}, http.StatusOK, false},
+		"a JSON value, not an object":       {rollouttest.Answer{Status: http.StatusOK, Body: []byte(`["v1.0.8"]`)}, http.StatusOK, false},
+		"a phase this server does not know": {rollouttest.Synthetic(t, "v1.0.8", "v1.0.7", "paused", ""), http.StatusOK, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc := rollouttest.NewService(t)
@@ -120,6 +128,27 @@ func TestEveryAnswerThatIsNotAStatusIsAnError(t *testing.T) {
 				t.Fatalf("Status = %+v, %v, want an Error with %d, refused %t", got, err, c.status, c.refused)
 			}
 		})
+	}
+}
+
+func TestAStatusOverAMebibyteIsAnError(t *testing.T) {
+	// A status as the contract has it, but for the length of its reason.
+	status := func(size int) rollouttest.Answer {
+		head := `{"target":"v1.0.9","running":"v1.0.8","phase":"failed","reason":"`
+		return rollouttest.Answer{Status: http.StatusOK, Body: []byte(head + strings.Repeat("x", size-len(head)-2) + `"}`)}
+	}
+	svc := rollouttest.NewService(t)
+	client := rollout.New(svc.URL, &http.Client{})
+
+	svc.Set("edity-sandbox", status(1<<20))
+	if got, err := client.Status(t.Context(), "edity-sandbox", rollout.Production); err != nil || got.Phase != rollout.Failed || len(got.Reason) < 1<<19 {
+		t.Fatalf("a status of 1 MiB: Status = %d characters of reason, %v, want it read", len(got.Reason), err)
+	}
+	svc.Set("edity-sandbox", status(1<<20+1))
+	got, err := client.Status(t.Context(), "edity-sandbox", rollout.Production)
+	var e *rollout.Error
+	if !errors.As(err, &e) || e.Status != http.StatusOK || e.Message != fmt.Sprintf("more than %d bytes", 1<<20) {
+		t.Errorf("a status of 1 MiB and a byte: Status = %d characters of reason, %v, want an Error for its size", len(got.Reason), err)
 	}
 }
 

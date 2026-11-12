@@ -334,6 +334,11 @@ func TestAStatusServiceWithoutAnAnswerNeverFailsAPublish(t *testing.T) {
 		"a proxy in front of it fails": func(_ *testing.T, f *fakeGitHub) {
 			f.status.Set(sandbox.ID, rollouttest.Answer{Status: http.StatusBadGateway, Body: []byte("Bad Gateway")})
 		},
+		// Read as nulls, the missing versions would be older than the
+		// Publish, and the hour would fail it.
+		"it answers a status with no versions": func(_ *testing.T, f *fakeGitHub) {
+			f.status.Set(sandbox.ID, rollouttest.Answer{Status: http.StatusOK, Body: []byte(`{"phase":"deploying"}`)})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, tracker := newFake(t)

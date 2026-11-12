@@ -138,7 +138,19 @@ func (c *Client) Status(ctx context.Context, site, environment string) (Status, 
 		return failed(res.StatusCode, message, nil)
 	}
 
-	// A null target or running is a version the service does not know.
+	// A null target or running is a version the service does not know, but
+	// a status without the key is not one the contract describes: read as
+	// null, it would count as an older version, and could fail a Publish.
+	// The contract answers every key, null or not.
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return failed(res.StatusCode, "not a status: "+err.Error(), err)
+	}
+	for _, key := range []string{"target", "running", "phase", "reason"} {
+		if _, ok := keys[key]; !ok {
+			return failed(res.StatusCode, "a status with no "+key, nil)
+		}
+	}
 	var answer struct {
 		Target  *string `json:"target"`
 		Running *string `json:"running"`
