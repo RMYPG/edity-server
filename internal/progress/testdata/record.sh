@@ -26,6 +26,10 @@ record "compare-${first:0:7}-v1.0.1.http" "$repo/compare/$first...v1.0.1?per_pag
 record "compare-${first:0:7}-v1.0.2.http" "$repo/compare/$first...v1.0.2?per_page=1"
 record "compare-${second:0:7}-v1.0.2.http" "$repo/compare/$second...v1.0.2?per_page=1"
 record release-runs.http "$repo/actions/workflows/release-on-publish.yml/runs?event=workflow_run&per_page=20"
+# The annotated tags of v1.0.1 and v1.0.2, whose dates start the hour a
+# Publish has to go live in.
+record tag-v1.0.1.http "$repo/git/tags/1ca0822932a9b62ffbd304358cb2c266eab2b6c4"
+record tag-v1.0.2.http "$repo/git/tags/fd6377a10c7e49e869ba86c231298f36c2ec5c5e"
 # What a sweep found on main while main was each Publish: the commits since
 # the last Release, and main's commits had there been no Release.
 record "compare-v1.0.0-${first:0:7}.http" "$repo/compare/v1.0.0...$first"

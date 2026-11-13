@@ -17,6 +17,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -75,7 +76,7 @@ func get(t *testing.T, h http.Handler, sha string, edit func(*http.Request)) *ht
 }
 
 func TestAPublishsProgressIsItsStageAndVersion(t *testing.T) {
-	for _, stage := range []progress.Stage{progress.Validating, progress.Releasing, progress.Released, progress.Failed} {
+	for _, stage := range []progress.Stage{progress.Validating, progress.Releasing, progress.Released, progress.Deploying, progress.Live, progress.Failed} {
 		tracker := &fakeTracker{progress: progress.Progress{Stage: stage, Version: release.Version{1, 0, 1}, Run: "https://github.com/x", Reason: "CI ended failure"}}
 		rec := get(t, progressServer(t, cookieSessions{}, tracker), commit, nil)
 		if want := fmt.Sprintf(`{"stage":%q,"version":"1.0.1"}`, stage); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != want {
@@ -166,6 +167,25 @@ func TestWhatTheProgressAnswersWhenGitHubDoesNotTell(t *testing.T) {
 		},
 		"Issues turned off": {
 			err:    fmt.Errorf("telling the Developer that %s failed: %w", commit, &github.Error{Call: "POST /repos/RMYPG/edity-sandbox/issues", Status: 410, Message: "Issues are disabled for this repo"}),
+			status: http.StatusInternalServerError,
+		},
+		// The rollout status service gives no answer: the Editor asks
+		// again, and never hears that the Publish failed, or of no such
+		// Publish.
+		"the rollout status service can't be reached": {
+			err:    &rollout.Error{Call: "GET /v1/sites/edity-sandbox/environments/production", Message: "dial tcp: connection refused"},
+			status: http.StatusServiceUnavailable,
+		},
+		"the rollout status service too slow": {
+			err:    &rollout.Error{Call: "GET /v1/sites/edity-sandbox/environments/production", Message: "context deadline exceeded", Err: context.DeadlineExceeded},
+			status: http.StatusServiceUnavailable,
+		},
+		"the rollout status service resyncing": {
+			err:    fmt.Errorf("asking: %w", &rollout.Error{Call: "GET /v1/sites/edity-sandbox/environments/production", Status: 503, Message: "watches not synced"}),
+			status: http.StatusServiceUnavailable,
+		},
+		"the rollout status service not configured for the Site": {
+			err:    &rollout.Error{Call: "GET /v1/sites/edity-sandbox/environments/production", Status: 404, Message: "unknown site or environment"},
 			status: http.StatusInternalServerError,
 		},
 	} {

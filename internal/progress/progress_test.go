@@ -18,6 +18,8 @@ import (
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/githubtest"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
+	"github.com/RMYPG/edity-server/internal/rollouttest"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
@@ -30,11 +32,15 @@ import (
 //     18:54:58, and Release on Publish from 18:55:01 to 18:55:36.
 //
 // Their Release on Publish runs are titled "Release on Publish", from before
-// the template named each run after its commit.
+// the template named each run after its commit. v1.0.1 was tagged at
+// 18:52:44, and v1.0.2 at 18:55:28: annotated tags, whose objects are
+// tagV101 and tagV102.
 const (
 	first     = "4bc931076ac8583bd8905a4c508c987877afc09d"
 	second    = "f50d2c45e28706d25da874225f0f64770cd1ac12"
 	developer = "31077c358f1b793aefc1c495c938055d99d3c227"
+	tagV101   = "1ca0822932a9b62ffbd304358cb2c266eab2b6c4"
+	tagV102   = "fd6377a10c7e49e869ba86c231298f36c2ec5c5e"
 )
 
 var sandbox = site.Site{ID: "edity-sandbox", Repository: site.Repository{Owner: "RMYPG", Name: "edity-sandbox"}}
@@ -88,8 +94,24 @@ func answers(t testing.TB) map[string]githubtest.Response {
 		"compare/" + first + "...v1.0.1?per_page=1":  githubtest.Recorded(t, "compare-4bc9310-v1.0.1.http"),
 		"compare/" + first + "...v1.0.2?per_page=1":  githubtest.Recorded(t, "compare-4bc9310-v1.0.2.http"),
 		"compare/" + second + "...v1.0.2?per_page=1": githubtest.Recorded(t, "compare-f50d2c4-v1.0.2.http"),
-		releaseRuns: githubtest.Recorded(t, "release-runs.http"),
+		releaseRuns:           githubtest.Recorded(t, "release-runs.http"),
+		"git/tags/" + tagV101: githubtest.Recorded(t, "tag-v1.0.1.http"),
+		"git/tags/" + tagV102: githubtest.Recorded(t, "tag-v1.0.2.http"),
 	}
+}
+
+// productionAt is the rollout status service's answer about the sandbox's
+// production, in the contract's shape, at the versions GitHub's answers
+// were recorded for: none was recorded then. An empty target, running or
+// reason is null.
+func productionAt(t testing.TB, target, running string, phase rollout.Phase, reason string) rollouttest.Answer {
+	t.Helper()
+	return rollouttest.Synthetic(t, target, running, string(phase), reason)
+}
+
+// stillAtV100 is production before the platform picked up either Publish.
+func stillAtV100(t testing.TB) rollouttest.Answer {
+	return productionAt(t, "v1.0.0", "v1.0.0", rollout.Live, "")
 }
 
 // tagsUpTo edits the tag list down to the tags up to last, as it was before
@@ -143,6 +165,9 @@ func releaseRunsUntil(t testing.TB, a map[string]githubtest.Response, edit func(
 // installation's rate limit unless they get 304.
 type fakeGitHub struct {
 	t *testing.T
+	// status is the rollout status service, which answers stillAtV100
+	// unless a test sets another answer.
+	status *rollouttest.Service
 
 	mu      sync.Mutex
 	now     time.Time
@@ -162,8 +187,11 @@ func newFake(t *testing.T) (*fakeGitHub, *Tracker) {
 	f := &fakeGitHub{t: t, now: at("18:50:01"), answers: answers(t), tokens: map[string]time.Time{}, asked: map[string]int{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
+	f.status = rollouttest.NewService(t)
+	f.status.Set(sandbox.ID, stillAtV100(t))
 	app := github.NewApp(5466528, githubtest.Key(), srv.URL, srv.Client())
-	tracker := New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin, nil)
+	tracker := New(func(r site.Repository) Repository { return app.Repo(r.Owner, r.Name) }, app.BotLogin,
+		rollout.New(f.status.URL, &http.Client{}), nil)
 	tracker.now = f.clock
 	return f, tracker
 }
@@ -276,11 +304,13 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // A moment is GitHub's answers about the first Publish from a moment on,
-// until the next: the recorded ones, edited back to how they were then.
+// until the next: the recorded ones, edited back to how they were then, and
+// the rollout status service's once it is released.
 type moment struct {
 	from    time.Time
 	stage   Stage
 	answers map[string]githubtest.Response
+	status  rollouttest.Answer
 }
 
 // firstPublish is the first Publish's moments, from its push on.
@@ -311,16 +341,23 @@ func firstPublish(t *testing.T) []moment {
 	released := answers(t)
 	tagsUpTo(t, released, "v1.0.1")
 
+	// Before it is released, the service is not asked.
+	none := rollouttest.Answer{}
 	return []moment{
-		{at("18:50:01"), Validating, pushed},
-		{at("18:50:04"), Validating, running("2026-10-29T18:50:04Z")},
+		{at("18:50:01"), Validating, pushed, none},
+		{at("18:50:04"), Validating, running("2026-10-29T18:50:04Z"), none},
 		// Its first job done, the next started.
-		{at("18:51:30"), Validating, running("2026-10-29T18:51:30Z")},
-		{at("18:52:13"), Releasing, passed},
-		{at("18:52:16"), Releasing, releasing},
-		{at("18:52:53"), Released, released},
-		// The second Publish's v1.0.2, as recorded.
-		{at("18:55:36"), Released, answers(t)},
+		{at("18:51:30"), Validating, running("2026-10-29T18:51:30Z"), none},
+		{at("18:52:13"), Releasing, passed, none},
+		{at("18:52:16"), Releasing, releasing, none},
+		{at("18:52:53"), Released, released, stillAtV100(t)},
+		// The platform picked v1.0.1 up.
+		{at("18:54:50"), Deploying, released, productionAt(t, "v1.0.1", "v1.0.0", rollout.Deploying, "")},
+		// The second Publish's v1.0.2, as recorded, picked up before
+		// v1.0.1 ran.
+		{at("18:55:36"), Deploying, answers(t), productionAt(t, "v1.0.2", "v1.0.0", rollout.Deploying, "")},
+		// The newer v1.0.2 runs, so the first is live too (P8).
+		{at("18:58:10"), Live, answers(t), productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, "")},
 	}
 }
 
@@ -655,17 +692,18 @@ func TestOnlyAPublishsCommitHasProgress(t *testing.T) {
 func TestRequestsForOneCommitShareALook(t *testing.T) {
 	f, tracker := newFake(t)
 	f.set(at("19:05:00"), nil)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, ""))
 	var wg sync.WaitGroup
 	for range 3 {
 		wg.Go(func() {
-			if p, err := tracker.Progress(t.Context(), sandbox, first); err != nil || p.Stage != Released {
+			if p, err := tracker.Progress(t.Context(), sandbox, first); err != nil || p.Stage != Live {
 				t.Errorf("Progress = %+v, %v", p, err)
 			}
 		})
 	}
 	wg.Wait()
-	if calls, _ := f.counts(); calls != 4 {
-		t.Errorf("three requests at once made %d calls, want one look's 4", calls)
+	if calls, _ := f.counts(); calls != 4 || f.status.Asked(sandbox.ID) != 1 {
+		t.Errorf("three requests at once made %d calls, and asked the rollout status %d times, want one look's 4, and once", calls, f.status.Asked(sandbox.ID))
 	}
 
 	f.set(at("19:05:04"), nil)
@@ -689,15 +727,18 @@ func TestRequestsForOneCommitShareALook(t *testing.T) {
 // since one installation covers every RMYPG repository. The Editor polls
 // every 5 seconds, 720 times an hour.
 //
-// One poll makes 4 calls, or 5 while releasing. Even if GitHub counted every
-// call, a Publish polled for a whole hour would cost at most 5 × 720 =
-// 3,600, within the 5,000 but with room for little else. GitHub does not
-// count a call it answers 304, which is every call whose answer did not
-// change, so a poll that finds nothing new costs nothing. The hour below,
-// from the push through both Releases and on, costs one call for each answer
-// that changed, and each answer once more when the token is replaced: under
-// 25 calls, so the 5,000 hold some 200 Publishes polled for an hour each. A
-// real Publish is polled for 5 to 10 minutes.
+// One poll makes 4 calls, or 5 while releasing, and while released or
+// deploying, when it reads when its Release was tagged. Even if GitHub
+// counted every call, a Publish polled for a whole hour would cost at most
+// 5 × 720 = 3,600, within the 5,000 but with room for little else. GitHub
+// does not count a call it answers 304, which is every call whose answer did
+// not change, so a poll that finds nothing new costs nothing. The hour
+// below, from the push through both Releases until the Site runs them and
+// on, costs one call for each answer that changed, and each answer once more
+// when the token is replaced: under 25 calls, so the 5,000 hold some 200
+// Publishes polled for an hour each. A real Publish is polled for 5 to 15
+// minutes. The rollout status service, which each poll of a released
+// Publish asks too, is the platform's, and has no rate limit.
 //
 // Every browser tab polling the same Publish shares one look every 5 seconds
 // (TestRequestsForOneCommitShareALook), so more tabs cost nothing more.
@@ -706,21 +747,25 @@ func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 	failed := ciFailed(t)
 
 	for _, c := range []struct {
-		name  string
-		now   time.Time
-		want  Stage
-		a     map[string]githubtest.Response
-		calls int
+		name   string
+		now    time.Time
+		want   Stage
+		a      map[string]githubtest.Response
+		status rollouttest.Answer
+		calls  int
 	}{
-		{"validating, no run yet", at("18:50:02"), Validating, moments[0].answers, 4},
-		{"validating, CI running", at("18:51:00"), Validating, moments[1].answers, 4},
-		{"releasing, no run yet", at("18:52:14"), Releasing, moments[3].answers, 5},
-		{"releasing", at("18:52:30"), Releasing, moments[4].answers, 5},
-		{"released", at("18:53:00"), Released, moments[5].answers, 4},
-		{"failed", at("18:52:20"), Failed, failed, 4},
+		{"validating, no run yet", at("18:50:02"), Validating, moments[0].answers, moments[0].status, 4},
+		{"validating, CI running", at("18:51:00"), Validating, moments[1].answers, moments[1].status, 4},
+		{"releasing, no run yet", at("18:52:14"), Releasing, moments[3].answers, moments[3].status, 5},
+		{"releasing", at("18:52:30"), Releasing, moments[4].answers, moments[4].status, 5},
+		{"released", at("18:53:00"), Released, moments[5].answers, moments[5].status, 5},
+		{"deploying", at("18:55:00"), Deploying, moments[6].answers, moments[6].status, 5},
+		{"live", at("18:58:10"), Live, moments[8].answers, moments[8].status, 4},
+		{"failed", at("18:52:20"), Failed, failed, rollouttest.Answer{}, 4},
 	} {
 		f, tracker := newFake(t)
 		f.set(c.now, c.a)
+		f.status.Set(sandbox.ID, c.status)
 		poll := func() (calls, counted int) {
 			calls, counted = f.counts()
 			p, err := tracker.Progress(t.Context(), sandbox, first)
@@ -753,6 +798,7 @@ func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 			}
 		}
 		f.set(now, m.answers)
+		f.status.Set(sandbox.ID, m.status)
 		p, err := tracker.Progress(t.Context(), sandbox, first)
 		if err != nil || p.Stage != m.stage {
 			t.Fatalf("at %s: Progress = %+v, %v, want %s", now.Format(time.TimeOnly), p, err, m.stage)
@@ -763,7 +809,7 @@ func TestPollingStaysWithinTheRateLimit(t *testing.T) {
 	}
 	calls, counted := f.counts()
 	t.Logf("an hour of polling: %d calls, %d counted against the installation's 5,000", calls, counted)
-	if fmt.Sprint(stages) != "[validating releasing released]" {
+	if fmt.Sprint(stages) != "[validating releasing released deploying live]" {
 		t.Errorf("stages %v", stages)
 	}
 	if calls > 5*720 || counted > 25 {

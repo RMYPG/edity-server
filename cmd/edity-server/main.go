@@ -17,6 +17,7 @@ import (
 	"github.com/RMYPG/edity-server/internal/login"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/publish"
+	"github.com/RMYPG/edity-server/internal/rollout"
 	"github.com/RMYPG/edity-server/internal/server"
 	"github.com/RMYPG/edity-server/internal/site"
 )
@@ -43,7 +44,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	publisher := github.NewApp(cfg.Publisher.ID, cfg.Publisher.PrivateKey, github.API, &http.Client{Timeout: 20 * time.Second})
 	repository := func(r site.Repository) *github.Repo { return publisher.Repo(r.Owner, r.Name) }
 	reporter := issues.New(repository, publisher.BotLogin, logger)
-	tracker := progress.New(repository, publisher.BotLogin, reporter)
+	// The service runs in the cluster and answers from memory.
+	rollouts := rollout.New(cfg.SiteStatus, &http.Client{Timeout: 10 * time.Second})
+	tracker := progress.New(repository, publisher.BotLogin, rollouts, reporter)
 	zitadel, err := login.New(login.Options{
 		Issuer: cfg.Zitadel.Issuer, ClientID: cfg.Zitadel.ClientID, Key: cfg.SessionKey, ProjectID: cfg.Zitadel.ProjectID,
 		ServiceUser: login.ServiceUser{ID: cfg.Zitadel.ServiceUser.ID, KeyID: cfg.Zitadel.ServiceUser.KeyID, Key: cfg.Zitadel.ServiceUser.PrivateKey},
@@ -61,7 +64,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	srv := httpServer(cfg.Addr, server.New(cfg.Sites, logger, services), logger)
 	served := make(chan error, 1)
 	go func() { served <- srv.ListenAndServe() }()
-	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.Publisher.ID)
+	logger.Info("edity-server listening", "addr", cfg.Addr, "github_app_id", cfg.Publisher.ID, "site_status", cfg.SiteStatus)
 
 	// A failed Publish is reported to the Developer even when no Client
 	// asks for its progress (V6).

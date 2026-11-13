@@ -24,7 +24,6 @@ type Site struct {
 	Repository  Repository `json:"githubRepository"`
 	Locale      string     `json:"locale"`
 	ZitadelRole string     `json:"zitadelRole"`
-	Kubernetes  Kubernetes `json:"kubernetes"`
 }
 
 // Repository is a GitHub repository, written "owner/name" in the Sites file.
@@ -47,12 +46,6 @@ func (r *Repository) UnmarshalText(text []byte) error {
 	}
 	r.Owner, r.Name = owner, name
 	return nil
-}
-
-// Kubernetes is where the Site's Releases run.
-type Kubernetes struct {
-	Namespace  string `json:"namespace"`
-	Deployment string `json:"deployment"`
 }
 
 // Registry is the list of Sites, indexed by hostname.
@@ -180,10 +173,6 @@ var (
 	// such as es, es-ES or zh-Hant-TW.
 	languageTag = regexp.MustCompile(`^(?i)[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?$`)
 	noSpaces    = regexp.MustCompile(`^\S+$`)
-	// Kubernetes names a namespace with a DNS label, and a Deployment with a
-	// DNS subdomain (RFC 1123).
-	kubernetesNamespace  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-	kubernetesObjectName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
 
 func (s Site) problems() []string {
@@ -212,14 +201,6 @@ func (s Site) problems() []string {
 	required("githubRepository", s.Repository.Owner)
 	matches("locale", s.Locale, languageTag, "is not a language tag, such as es or es-ES")
 	matches("zitadelRole", s.ZitadelRole, noSpaces, "has spaces")
-	matches("kubernetes.namespace", s.Kubernetes.Namespace, kubernetesNamespace,
-		"is not a Kubernetes namespace name: lowercase letters, digits and -, at most 63")
-	if len(s.Kubernetes.Deployment) > 253 {
-		problems = append(problems, "kubernetes.deployment: longer than 253 characters")
-	} else {
-		matches("kubernetes.deployment", s.Kubernetes.Deployment, kubernetesObjectName,
-			"is not a Kubernetes object name: lowercase letters, digits, - and .")
-	}
 	return problems
 }
 

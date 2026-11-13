@@ -10,18 +10,20 @@ import (
 	"github.com/RMYPG/edity-server/internal/github"
 	"github.com/RMYPG/edity-server/internal/progress"
 	"github.com/RMYPG/edity-server/internal/release"
+	"github.com/RMYPG/edity-server/internal/rollout"
 	"github.com/RMYPG/edity-server/internal/site"
 )
 
 // A Tracker tells how far a Publish has got. *progress.Tracker is one.
 type Tracker interface {
 	// Progress returns progress.ErrNotPublish for a sha that is not the
-	// commit of a Publish on s.
+	// commit of a Publish on s, and a *rollout.Error when the platform's
+	// rollout status service gives no answer.
 	Progress(ctx context.Context, s site.Site, sha string) (progress.Progress, error)
 }
 
-// progressTimeout bounds how long a request waits for GitHub to tell a
-// Publish's progress.
+// progressTimeout bounds how long a request waits for GitHub and the rollout
+// status service to tell a Publish's progress.
 const progressTimeout = 25 * time.Second
 
 type progressHandler struct {
@@ -66,8 +68,20 @@ func (h *progressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}{p.Stage, p.Version})
 }
 
-// fail answers a request whose progress GitHub did not tell.
+// fail answers a request whose progress GitHub or the rollout status
+// service did not tell. Neither ever answers that the Publish failed: the
+// Editor asks again.
 func (h *progressHandler) fail(w http.ResponseWriter, r *http.Request, s site.Site, err error) {
 	h.logger.LogAttrs(r.Context(), slog.LevelError, "progress failed", slog.String("site", s.ID), slog.String("error", err.Error()))
-	failedOnGitHub(w, err, "ask again")
+	var unanswered *rollout.Error
+	switch {
+	case errors.As(err, &unanswered) && unanswered.Refused():
+		// The service is not configured for the Site, which the Developer
+		// or the platform has to fix.
+		http.Error(w, "The platform's rollout status service does not know the Site: the Developer has to fix it.", http.StatusInternalServerError)
+	case errors.As(err, &unanswered):
+		http.Error(w, "The platform's rollout status could not be read: ask again later.", http.StatusServiceUnavailable)
+	default:
+		failedOnGitHub(w, err, "ask again")
+	}
 }

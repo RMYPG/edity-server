@@ -32,16 +32,14 @@ const twoSites = `{
       "hostnames": ["sandbox.example.com", "www.sandbox.example.com", "localhost"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
-      "zitadelRole": "site:edity-sandbox",
-      "kubernetes": {"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+      "zitadelRole": "site:edity-sandbox"
     },
     {
       "id": "fisioindoor",
       "hostnames": ["fisioindoor.example.com"],
       "githubRepository": "RMYPG/fisioindoor",
       "locale": "es",
-      "zitadelRole": "site:fisioindoor",
-      "kubernetes": {"namespace": "fisioindoor", "deployment": "fisioindoor-sws"}
+      "zitadelRole": "site:fisioindoor"
     }
   ]
 }`

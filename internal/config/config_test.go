@@ -23,8 +23,7 @@ const sandbox = `{
       "hostnames": ["sandbox.example.com"],
       "githubRepository": "RMYPG/edity-sandbox",
       "locale": "en",
-      "zitadelRole": "site:edity-sandbox",
-      "kubernetes": {"namespace": "edity-sandbox", "deployment": "edity-sandbox-sws"}
+      "zitadelRole": "site:edity-sandbox"
     }
   ]
 }`
@@ -105,6 +104,26 @@ func TestLoadAcceptsAnIssuerOverHTTPOnlyOnLoopback(t *testing.T) {
 	}
 }
 
+func TestLoadReadsTheRolloutStatusServicesAddress(t *testing.T) {
+	for address, want := range map[string]string{
+		// Inside the cluster, over plain http.
+		"http://site-status.site-status.svc:8080":  "http://site-status.site-status.svc:8080",
+		"http://site-status.site-status.svc:8080/": "http://site-status.site-status.svc:8080",
+		"https://status.example.com/site-status":   "https://status.example.com/site-status",
+		"http://127.0.0.1:8081":                    "http://127.0.0.1:8081",
+	} {
+		env := validEnv(t)
+		env["EDITY_SITE_STATUS_URL"] = address
+		cfg, err := config.Load(getenv(env))
+		if err != nil {
+			t.Fatalf("%s: Load: %v", address, err)
+		}
+		if cfg.SiteStatus != want {
+			t.Errorf("SiteStatus = %q, want %q", cfg.SiteStatus, want)
+		}
+	}
+}
+
 func TestLoadListensOnEdityAddr(t *testing.T) {
 	env := validEnv(t)
 	env["EDITY_ADDR"] = "127.0.0.1:9000"
@@ -144,6 +163,7 @@ func TestLoadNamesEveryMissingVariable(t *testing.T) {
 	for _, name := range []string{
 		"EDITY_SITES_FILE", "EDITY_PUBLISHER_GITHUB_APP_ID", "EDITY_PUBLISHER_GITHUB_APP_PRIVATE_KEY",
 		"EDITY_ZITADEL_ISSUER", "EDITY_ZITADEL_CLIENT_ID", "EDITY_ZITADEL_PROJECT_ID", "EDITY_ZITADEL_SERVICE_KEY", "EDITY_SESSION_KEY",
+		"EDITY_SITE_STATUS_URL",
 	} {
 		if !strings.Contains(err.Error(), name+": not set") {
 			t.Errorf("Load error = %q, want it to say %s is not set", err, name)
@@ -177,6 +197,12 @@ func TestLoadRejectsABadVariable(t *testing.T) {
 		{"an application's key", "EDITY_ZITADEL_SERVICE_KEY", jsonKey(map[string]string{"type": "application", "keyId": "1", "appId": "2", "clientId": "3", "key": notAKey}), "EDITY_ZITADEL_SERVICE_KEY: " + notAJSONKey},
 		{"service key not PEM", "EDITY_ZITADEL_SERVICE_KEY", jsonKey(map[string]string{"userId": "1", "keyId": "1", "key": "c2VjcmV0LWtleS1ieXRlcw=="}), "EDITY_ZITADEL_SERVICE_KEY: not a PEM private key"},
 		{"service key not RSA", "EDITY_ZITADEL_SERVICE_KEY", jsonKey(map[string]string{"userId": "1", "keyId": "1", "key": notAKey}), "EDITY_ZITADEL_SERVICE_KEY: not an RSA private key"},
+		{"status address with no scheme", "EDITY_SITE_STATUS_URL", "site-status.site-status.svc:8080", "EDITY_SITE_STATUS_URL: not an http or https URL"},
+		{"status address with no host", "EDITY_SITE_STATUS_URL", "http:///v1", "EDITY_SITE_STATUS_URL: not an http or https URL"},
+		{"status address over another scheme", "EDITY_SITE_STATUS_URL", "ftp://site-status.site-status.svc", "EDITY_SITE_STATUS_URL: not an http or https URL"},
+		{"status address with credentials", "EDITY_SITE_STATUS_URL", "http://user:pass@site-status.site-status.svc", "EDITY_SITE_STATUS_URL: not an http or https URL"},
+		{"status address with a query", "EDITY_SITE_STATUS_URL", "http://site-status.site-status.svc?site=x", "EDITY_SITE_STATUS_URL: not an http or https URL"},
+		{"status address with a fragment", "EDITY_SITE_STATUS_URL", "http://site-status.site-status.svc#x", "EDITY_SITE_STATUS_URL: not an http or https URL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,6 +234,7 @@ func validEnv(t *testing.T) map[string]string {
 		"EDITY_ZITADEL_PROJECT_ID":               "340000000000000001",
 		"EDITY_ZITADEL_SERVICE_KEY":              serviceKey(newKey(t)),
 		"EDITY_SESSION_KEY":                      base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		"EDITY_SITE_STATUS_URL":                  "http://site-status.site-status.svc:8080",
 	}
 }
 

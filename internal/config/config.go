@@ -11,6 +11,8 @@
 //     Publish, whether the Client still holds the Site's role
 //   - EDITY_SESSION_KEY, the key that seals Clients' sessions, 32 bytes in
 //     base64
+//   - EDITY_SITE_STATUS_URL, the address of the platform's rollout status
+//     service, which tells whether each Site runs a Release
 package config
 
 import (
@@ -42,6 +44,10 @@ type Config struct {
 	// SessionKey seals Clients' sessions. Restarting the server with the same
 	// key keeps them.
 	SessionKey []byte
+	// SiteStatus is the address of the platform's rollout status service,
+	// such as http://site-status.site-status.svc:8080, with no trailing
+	// slash. It is read-only and takes no credentials.
+	SiteStatus string
 }
 
 // Zitadel is the server's OIDC client on a Zitadel instance, and what it asks
@@ -125,6 +131,13 @@ func Load(getenv func(string) string) (Config, error) {
 		cfg.SessionKey, err = parseSessionKey(key)
 		return err
 	})
+	read("EDITY_SITE_STATUS_URL", func(address string) error {
+		if !isServiceURL(address) {
+			return errors.New("not an http or https URL with no credentials, query or fragment")
+		}
+		cfg.SiteStatus = strings.TrimSuffix(address, "/")
+		return nil
+	})
 
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
@@ -158,6 +171,17 @@ func isIssuer(text string) bool {
 		return false
 	}
 	return u.Scheme == "https" || u.Scheme == "http" && site.IsLoopback(u.Hostname())
+}
+
+// isServiceURL tells whether text is the address of a service the server
+// calls paths under: http or https, since a service inside the cluster
+// answers over plain http, with a host and nothing a path can't follow.
+func isServiceURL(text string) bool {
+	u, err := url.Parse(text)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
 }
 
 // parseSessionKey reads the 32 bytes of an AES-256 key in base64. Its error
