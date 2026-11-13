@@ -345,13 +345,137 @@ func TestASweepThatSawTheLastReleaseRunningReportsNothingWhileAPodRestarts(t *te
 		t.Fatalf("Sweep at v1.0.2 = %+v, %v, want nothing since it", sw, err)
 	}
 
+	// Every sweep while it stays so starts from v1.0.2: one with nothing
+	// running does not make the Tracker forget what it saw.
 	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, recordedReason(t, "failed-171711-truncated.json")))
-	f.set(at("19:10:00"), a)
-	if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || len(sw.Progress) != 0 || f.asked["compare/v1.0.1...main"] != 0 {
-		t.Errorf("Sweep while the Pod restarts = %+v, %v, want nothing, since v1.0.2", sw, err)
+	for i, now := range []string{"19:10:00", "19:15:00", "19:20:00"} {
+		f.set(at(now), a)
+		if sw, err := tracker.Sweep(t.Context(), sandbox); err != nil || len(sw.Progress) != 0 || f.asked["compare/v1.0.1...main"] != 0 {
+			t.Errorf("sweep %d while the Pod restarts = %+v, %v, want nothing, since v1.0.2", i+1, sw, err)
+		}
 	}
 	if told := reporter.failures(); len(told) != 0 {
 		t.Errorf("the Developer was told of %+v", told)
+	}
+}
+
+func TestTheVersionLastSeenRunningWinsOverAnOlderTarget(t *testing.T) {
+	// v1.0.0 is live; v1.0.1 holds the first Publish, which never ran, and
+	// v1.0.2 and v1.0.3 only a Developer's commits. With nothing running
+	// and v1.0.2's rollout failing, the target is older than the last
+	// Release, but the sweep starts from v1.0.0, where production was last
+	// seen, and not from v1.0.1, the Release before the target, so that the
+	// first Publish is reported. v1.0.3's tag is v1.0.2's recording, edited.
+	reason := recordedReason(t, "failed-170046.json")
+	a := answers(t)
+	withTag(t, a, "v1.0.3", "3333333333333333333333333333333333333333", first, "2026-10-29T18:56:30Z")
+	a["compare/v1.0.0...main"] = comparedWith(t, first, developerBump)
+	a["compare/v1.0.1...main"] = comparedWith(t, developerBump)
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	f.set(at("18:58:00"), a)
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.0", "v1.0.0", rollout.Live, ""))
+	if _, err := tracker.Sweep(t.Context(), sandbox); err != nil {
+		t.Fatal(err)
+	}
+
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, reason))
+	f.set(at("19:05:00"), a)
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 1}, Reason: "its rollout failed"}
+	if err != nil || !maps.Equal(sw.Progress, map[string]Progress{first: failed}) || f.asked["compare/v1.0.1...main"] != 0 {
+		t.Errorf("Sweep = %+v, %v, want the first Publish failed, since v1.0.0", sw, err)
+	}
+	want := []Failure{{SHA: first, Message: firstMessage, Version: failed.Version, Released: true, Reason: failed.Reason, Rollout: reason, ID: "rollout:" + first}}
+	if told := reporter.failures(); !slices.Equal(told, want) {
+		t.Errorf("the Developer was told of %+v, want %+v", told, want)
+	}
+}
+
+func TestAnyVersionSeenRunningIsRemembered(t *testing.T) {
+	// A sweep sees v1.0.0 live, then v1.0.1 running while v1.0.2 deploys.
+	// Then the Pods are gone, and v1.0.2's rollout fails: the sweep starts
+	// from v1.0.1, the version last seen running though the Site was not
+	// live, so the first Publish, which ran, is not reported, and the
+	// second is.
+	reason := recordedReason(t, "failed-170046.json")
+	a := answers(t)
+	mainAt(t, a, second)
+	a["compare/v1.0.0...main"] = comparedWith(t, first, second)
+	a["compare/v1.0.1...main"] = comparedWith(t, second)
+	f, tracker := newFake(t)
+	reporter := &fakeReporter{}
+	tracker.reporter = reporter
+	for _, c := range []struct {
+		now    string
+		status rollouttest.Answer
+	}{
+		{"18:56:00", productionAt(t, "v1.0.0", "v1.0.0", rollout.Live, "")},
+		{"18:57:00", productionAt(t, "v1.0.2", "v1.0.1", rollout.Deploying, "")},
+	} {
+		f.set(at(c.now), a)
+		f.status.Set(sandbox.ID, c.status)
+		if _, err := tracker.Sweep(t.Context(), sandbox); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	f.status.Set(sandbox.ID, productionAt(t, "v1.0.2", "", rollout.Failed, reason))
+	f.set(at("19:05:00"), a)
+	sw, err := tracker.Sweep(t.Context(), sandbox)
+	failed := Progress{Stage: Failed, Version: release.Version{1, 0, 2}, Reason: "its rollout failed"}
+	if err != nil || !maps.Equal(sw.Progress, map[string]Progress{second: failed}) {
+		t.Errorf("Sweep = %+v, %v, want the second Publish failed, since v1.0.1", sw, err)
+	}
+	if told := reporter.failures(); len(told) != 1 || told[0].ID != "rollout:"+second {
+		t.Errorf("the Developer was told of %+v, want the second Publish's rollout alone", told)
+	}
+}
+
+func TestEachSiteRemembersItsOwnVersion(t *testing.T) {
+	// Two Sites on one repository, A the sandbox and B another: each sweep
+	// with nothing running starts from the version its own Site was last
+	// seen running, or, with none, from the Release before the last.
+	other := site.Site{ID: "other", Repository: sandbox.Repository}
+	a := answers(t)
+	mainAt(t, a, second)
+	a["compare/v1.0.0...main"] = comparedWith(t, first, second)
+	a["compare/v1.0.1...main"] = comparedWith(t, second)
+	f, tracker := newFake(t)
+	f.set(at("19:05:00"), a)
+	sweep := func(s site.Site, status rollouttest.Answer) (since string) {
+		t.Helper()
+		f.mu.Lock()
+		clear(f.asked)
+		f.mu.Unlock()
+		f.status.Set(s.ID, status)
+		if _, err := tracker.Sweep(t.Context(), s); err != nil {
+			t.Fatalf("Sweep of %s: %v", s.ID, err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, tag := range []string{"v1.0.0", "v1.0.1", "v1.0.2"} {
+			if f.asked["compare/"+tag+"...main"] > 0 {
+				return tag
+			}
+		}
+		return ""
+	}
+	nothingRuns := productionAt(t, "v1.0.2", "", rollout.Deploying, "")
+
+	// A seen at v1.0.2; B seen at nothing.
+	sweep(sandbox, productionAt(t, "v1.0.2", "v1.0.2", rollout.Live, ""))
+	if since := sweep(other, nothingRuns); since != "v1.0.1" {
+		t.Errorf("B, with nothing remembered, swept since %q, want v1.0.1", since)
+	}
+	// B seen at v1.0.0.
+	sweep(other, productionAt(t, "v1.0.0", "v1.0.0", rollout.Live, ""))
+	if since := sweep(sandbox, nothingRuns); since != "v1.0.2" {
+		t.Errorf("A swept since %q, want v1.0.2, its own", since)
+	}
+	if since := sweep(other, nothingRuns); since != "v1.0.0" {
+		t.Errorf("B swept since %q, want v1.0.0, its own", since)
 	}
 }
 
